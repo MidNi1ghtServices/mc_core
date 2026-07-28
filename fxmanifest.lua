@@ -4,7 +4,7 @@ lua54 'yes'
 
 author 'Nigh1'
 description 'MC Core'
-version '1.1.4'
+version '1.1.5'
 
 escrow_ignore {
     'config/config.lua',
