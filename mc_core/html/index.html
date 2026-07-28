@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vsMechanic NUI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<!-- ================================================= -->
+<!-- INSURANCE UI (eigenständig)                        -->
+<!-- ================================================= -->
+<div id="insuranceApp" class="app hidden">
+    <main class="panel insurance-panel">
+
+        <span class="corner corner-tl"></span>
+        <span class="corner corner-tr"></span>
+        <span class="corner corner-bl"></span>
+        <span class="corner corner-br"></span>
+
+        <header class="panel-header">
+            <div class="brand">
+                <span class="brand-dot"></span>
+                Versicherung
+            </div>
+            <button id="insuranceCloseBtn" class="close-btn" title="Schließen (ESC)">✕</button>
+        </header>
+
+        <h2 class="section-title">
+            <span class="eyebrow">01</span> Tarif wählen
+        </h2>
+
+        <div id="insuranceTiers" class="tier-list">
+
+            <button class="tier-btn" data-tier="basic">
+                <span class="tier-name">Basic</span>
+                <span class="tier-price cash" data-price-for="basic"></span>
+            </button>
+
+            <button class="tier-btn" data-tier="default">
+                <span class="tier-name">Standard</span>
+                <span class="tier-price cash" data-price-for="default"></span>
+            </button>
+
+            <button class="tier-btn" data-tier="premium">
+                <span class="tier-name">Premium</span>
+                <span class="tier-price cash" data-price-for="premium"></span>
+            </button>
+
+        </div>
+
+        <div id="insuranceFeedback" class="empty-state small"></div>
+
+        <footer class="footer">
+            Drücke <span class="key">ESC</span> zum Schließen
+        </footer>
+
+    </main>
+</div>
+
+<!-- ================================================= -->
+<!-- CRAFTER UI (eigenständig)                          -->
+<!-- ================================================= -->
+<div id="crafterApp" class="app hidden">
+    <main class="panel crafter-panel">
+
+        <span class="corner corner-tl"></span>
+        <span class="corner corner-tr"></span>
+        <span class="corner corner-bl"></span>
+        <span class="corner corner-br"></span>
+
+        <header class="panel-header">
+            <div class="brand">
+                <span class="brand-dot"></span>
+                Crafter
+            </div>
+            <button id="crafterCloseBtn" class="close-btn" title="Schließen (ESC)">✕</button>
+        </header>
+
+        <div class="body-grid crafter-grid">
+
+            <aside class="col left">
+
+                <h2 class="section-title">
+                    <span class="eyebrow">01</span> Rezepte
+                </h2>
+
+                <div class="search">
+                    <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16">
+                        <circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/>
+                        <line x1="15.5" y1="15.5" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    <input
+                        id="searchInput"
+                        type="search"
+                        placeholder="Rezept suchen..."
+                        autocomplete="off">
+                </div>
+
+                <div id="craftItems" class="list"></div>
+
+            </aside>
+
+            <section class="col middle">
+
+                <h2 class="section-title">
+                    <span class="eyebrow">02</span> Rezept
+                </h2>
+
+                <div id="detailContent" class="detail">
+                    <div class="empty-state">Wähle links ein Rezept aus.</div>
+                </div>
+
+                <div class="actions">
+                    <input
+                        id="quantityInput"
+                        class="qty-input"
+                        type="number"
+                        min="1"
+                        value="1">
+
+                    <button
+                        id="craftButton"
+                        class="craft-button"
+                        disabled>
+                        Herstellen
+                    </button>
+                </div>
+
+            </section>
+
+            <aside class="col right">
+
+                <h2 class="section-title">
+                    <span class="eyebrow">03</span> Warteschlange
+                </h2>
+
+                <div class="queue-wrap">
+                    <div id="queueItems" class="queue">
+                        <div class="empty-state small">Keine aktiven Aufträge.</div>
+                    </div>
+                </div>
+
+            </aside>
+
+        </div>
+
+        <footer class="footer">
+            Drücke <span class="key">ESC</span> zum Schließen
+        </footer>
+
+    </main>
+</div>
+
+<!-- ================================================= -->
+<!-- LABOR UI (eigenständig)                            -->
+<!-- ================================================= -->
+<div id="laborApp" class="app hidden">
+    <main class="panel labor-panel">
+
+        <span class="corner corner-tl"></span>
+        <span class="corner corner-tr"></span>
+        <span class="corner corner-bl"></span>
+        <span class="corner corner-br"></span>
+
+        <header class="panel-header">
+            <div class="brand">
+                <span class="brand-dot"></span>
+                Labor
+            </div>
+            <button id="laborCloseBtn" class="close-btn" title="Schließen (ESC)">✕</button>
+        </header>
+
+        <h2 class="section-title">
+            <span class="eyebrow">04</span> <span id="laborTitle">Labor</span>
+        </h2>
+
+        <div class="detail labor-stats">
+
+            <div class="labor-row">
+                <span>Items</span>
+                <strong id="laborItems">0</strong>
+            </div>
+
+            <div class="labor-row">
+                <span>Schwarzgeld</span>
+                <strong class="cash">$<span id="laborMoney">0</span></strong>
+            </div>
+
+            <div class="labor-row timer-row">
+                <span>Restzeit</span>
+                <strong id="laborTime">00:00</strong>
+            </div>
+
+            <div class="progress-track">
+                <div id="laborProgress" class="progress-fill"></div>
+            </div>
+
+        </div>
+
+        <div class="actions">
+
+            <input
+                id="laborAmount"
+                class="qty-input"
+                type="number"
+                min="1"
+                placeholder="Menge">
+
+            <button
+                id="laborDeposit"
+                class="craft-button">
+                Einlegen
+            </button>
+
+        </div>
+
+        <button
+            id="laborCollect"
+            class="craft-button labor-btn">
+            Schwarzgeld abholen
+        </button>
+
+        <footer class="footer">
+            Drücke <span class="key">ESC</span> zum Schließen
+        </footer>
+
+    </main>
+</div>
+
+<!-- ================================================= -->
+<!-- VERKAUF UI (eigenständig)                          -->
+<!-- ================================================= -->
+<div id="verkaufApp" class="app hidden">
+    <main class="panel labor-panel">
+
+        <span class="corner corner-tl"></span>
+        <span class="corner corner-tr"></span>
+        <span class="corner corner-bl"></span>
+        <span class="corner corner-br"></span>
+
+        <header class="panel-header">
+            <div class="brand">
+                <span class="brand-dot"></span>
+                <span id="verkaufTitle">Verkauf</span>
+            </div>
+            <button id="verkaufCloseBtn" class="close-btn" title="Schließen (ESC)">✕</button>
+        </header>
+
+        <div class="detail labor-stats">
+
+            <div class="labor-row">
+                <span>Produkt</span>
+                <strong id="verkaufItem">-</strong>
+            </div>
+
+            <div class="labor-row">
+                <span>Menge pro Verkauf</span>
+                <strong id="verkaufAnzahl">1</strong>
+            </div>
+
+            <div class="labor-row">
+                <span>Preis pro Verkauf</span>
+                <strong class="cash">$<span id="verkaufPrice">0</span></strong>
+            </div>
+
+        </div>
+
+        <div class="actions">
+
+            <input
+                id="verkaufAmount"
+                class="qty-input"
+                type="number"
+                min="1"
+                value="1">
+
+            <button
+                id="verkaufSellBtn"
+                class="craft-button">
+                Verkaufen
+            </button>
+
+        </div>
+
+        <div id="verkaufFeedback" class="empty-state small"></div>
+
+        <footer class="footer">
+            Drücke <span class="key">ESC</span> zum Schließen
+        </footer>
+
+    </main>
+</div>
+
+<!-- ================================================= -->
+<!-- MONEYWASH UI (eigenständig)                        -->
+<!-- ================================================= -->
+<div id="moneywashApp" class="app hidden">
+    <main class="panel moneywash-panel">
+
+        <span class="corner corner-tl"></span>
+        <span class="corner corner-tr"></span>
+        <span class="corner corner-bl"></span>
+        <span class="corner corner-br"></span>
+
+        <header class="panel-header">
+            <div class="brand">
+                <span class="brand-dot"></span>
+                Moneywash
+            </div>
+            <button id="moneywashCloseBtn" class="close-btn" title="Schließen (ESC)">✕</button>
+        </header>
+
+        <div class="mw-tabs">
+            <button class="mw-tab active" data-mwtab="wash">Geld waschen</button>
+            <button class="mw-tab" data-mwtab="jobs">Aktive Jobs</button>
+        </div>
+
+        <div id="mwTabWash" class="mw-tab-content active">
+
+            <div class="mw-convert-row">
+                <div class="mw-convert-box black">
+                    <span class="mw-badge mw-badge-red">Schwarzgeld</span>
+                    <div class="labor-row">
+                        <span>Verfügbar</span>
+                        <strong id="mwBlackAvailable">0$</strong>
+                    </div>
+                </div>
+                <div class="mw-convert-box clean">
+                    <span class="mw-badge mw-badge-green">Bargeld</span>
+                    <div class="labor-row">
+                        <span>Verfügbar</span>
+                        <strong id="mwCleanAvailable" class="cash">0$</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="empty-state small" id="mwFeeNote">Die Gebühren betragen zwischen 5 und 50%</div>
+
+            <div id="mwPackageList" class="mw-package-list"></div>
+
+            <div class="mw-custom-card">
+                <div class="actions">
+                    <input id="mwCustomAmount" class="qty-input mw-amount-input" type="text" inputmode="numeric" placeholder="Betrag eingeben">
+                    <span id="mwCustomFeeBadge" class="mw-badge mw-badge-red">0%</span>
+                </div>
+
+                <div class="labor-row">
+                    <span>Bargeld</span>
+                    <strong id="mwCustomClean" class="cash">0$</strong>
+                </div>
+                <div class="labor-row">
+                    <span>Zeit</span>
+                    <strong id="mwCustomTime">0.0h</strong>
+                </div>
+
+                <button id="mwConfirmBtn" class="craft-button labor-btn">Bestätigen</button>
+            </div>
+
+        </div>
+
+        <div id="mwTabJobs" class="mw-tab-content">
+            <div id="mwJobsList" class="queue">
+                <div class="empty-state small">Keine aktiven Wäschen.</div>
+            </div>
+        </div>
+
+        <footer class="footer">
+            Drücke <span class="key">ESC</span> zum Schließen
+        </footer>
+
+    </main>
+</div>
+
+<!-- ================================================= -->
+<!-- REVIVE STATION UI (eigenständig, Originaldesign)   -->
+<!-- ================================================= -->
+<div id="reviveApp" class="app hidden">
+    <div id="ws-panel">
+
+        <div class="ws-header">
+            <span class="ws-title-white">REVIVE</span>
+            <span class="ws-title-red">STATION</span>
+        </div>
+
+        <div id="ws-price"></div>
+
+        <div class="ws-subtitle">DU BIST BEWUSSTLOS</div>
+
+        <button id="ws-revive" class="ws-btn-green">Wiederbeleben</button>
+        <button id="ws-close" class="ws-btn-red">Schließen</button>
+
+    </div>
+</div>
+
+<script src="app.js"></script>
+
+</body>
+</html>
