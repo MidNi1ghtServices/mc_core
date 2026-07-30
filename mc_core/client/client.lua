@@ -1,16 +1,108 @@
 -- ============================================================
 --  MC CORE - COMBINED CLIENT.LUA
---  Automatisch zusammengeführt aus:
---  Abschleppsystem, antiafk, crafter, discord, elevator, event,
---  farming, Fraktionssperre, givecar, klingel, labor, maut,
---  mechanic_client, moneywash, npc_blocker, purge, sperrezone,
---  tow, verkauf
---
---  Jeder Abschnitt läuft in einem eigenen do...end Block, damit
---  lokale Variablen (z.B. mehrfaches "local ESX = ...") sich
---  nicht gegenseitig überschreiben. Globale Funktionen/Events
---  bleiben wie im Original global verfügbar.
 -- ============================================================
+
+-- ============================================================
+-- GLOBAL: Zentrales Notify-System (konfigurierbar über NotifyConfig)
+-- ============================================================
+-- Wird von ALLEN Modulen außer Sperrzone genutzt (kleine Toast-Notification).
+-- Sperrzone nutzt bewusst weiterhin hex_future_hud:announce (großes Banner).
+--
+-- In deiner config.lua einstellbar, z.B.:
+--
+-- NotifyConfig = {
+--     system = "auto",  -- "auto" | "hex_future_hud" | "ox_lib" | "esx" | "qbcore" | "custom"
+--     customEvent = "mc_core:notify", -- nur bei system = "custom"
+--     defaultDuration = 5000
+-- }
+--
+function MC_Notify(title, msg, ntype, duration)
+    ntype = ntype or "info"
+    duration = duration or (NotifyConfig and NotifyConfig.defaultDuration) or 5000
+    local system = (NotifyConfig and NotifyConfig.system) or "auto"
+
+    local function tryHexHud()
+        if GetResourceState('hex_future_hud') == 'started' then
+            TriggerEvent('hex_future_hud:notify', title, msg, ntype, duration)
+            return true
+        end
+        return false
+    end
+
+    local function tryOxLib()
+        if GetResourceState('ox_lib') == 'started' then
+            exports.ox_lib:notify({ title = title, description = msg, type = ntype, duration = duration })
+            return true
+        end
+        return false
+    end
+
+    local function tryEsx()
+        if GetResourceState('es_extended') == 'started' then
+            local ESX = exports["es_extended"]:getSharedObject()
+            ESX.ShowNotification(("%s: %s"):format(title, msg))
+            return true
+        end
+        return false
+    end
+
+    local function tryQbCore()
+        if GetResourceState('qb-core') == 'started' then
+            local QBCore = exports['qb-core']:GetCoreObject()
+            QBCore.Functions.Notify(msg, ntype, duration)
+            return true
+        end
+        return false
+    end
+
+    local function tryCustom()
+        if NotifyConfig and NotifyConfig.customEvent then
+            TriggerEvent(NotifyConfig.customEvent, title, msg, ntype, duration)
+            return true
+        end
+        return false
+    end
+
+    local function fallback()
+        SetTextComponentFormat("STRING")
+        AddTextComponentString(("%s: %s"):format(title, msg))
+        DisplayHelpTextFromStringLabel(0, false, true, -1)
+    end
+
+    -- Fest eingestelltes System (überspringt Auto-Detect)
+    if system == "hex_future_hud" then if tryHexHud() then return end
+    elseif system == "ox_lib" then if tryOxLib() then return end
+    elseif system == "esx" then if tryEsx() then return end
+    elseif system == "qbcore" then if tryQbCore() then return end
+    elseif system == "custom" then if tryCustom() then return end
+    end
+
+    -- Auto-Detect (system == "auto" oder obiges Fixed-System nicht verfügbar)
+    if tryCustom() then return end
+    if tryHexHud() then return end
+    if tryOxLib() then return end
+    if tryEsx() then return end
+    if tryQbCore() then return end
+
+    fallback()
+end
+
+-- Hilfsfunktion speziell für "Help"-Notifies (3D/HUD Hinweis à la "Drücke E")
+function MC_NotifyHelp(msg)
+    if NotifyConfig and NotifyConfig.customHelpEvent then
+        TriggerEvent(NotifyConfig.customHelpEvent, msg)
+        return
+    end
+
+    if GetResourceState('hex_future_hud') == 'started' then
+        TriggerEvent('hex_future_hud:notify', msg)
+        return
+    end
+
+    SetTextComponentFormat("STRING")
+    AddTextComponentString(msg)
+    DisplayHelpTextFromStringLabel(0, false, true, -1)
+end
 
 
 -- ============================================================
@@ -34,18 +126,27 @@ end
 
 
 -- ============================================================
--- SECTION: antiafk.lua
+-- SECTION: antiafk.lua (CLIENT)
 -- ============================================================
 do
     local lastActivity = GetGameTimer()
     local lastPos = nil
+    local warned = false
 
     local function updateActivity()
-        TriggerServerEvent('mc_core:updateActivity')
         lastActivity = GetGameTimer()
+        warned = false
+        TriggerServerEvent('mc_core:updateActivity')
     end
 
-    -- Raycast Funktion
+    function RotAnglesToVec(rot)
+        local z = math.rad(rot.z)
+        local x = math.rad(rot.x)
+        local num = math.abs(math.cos(x))
+
+        return vector3(-math.sin(z) * num, math.cos(z) * num, math.sin(x))
+    end
+
     function RayCastGamePlayCamera(dist)
         local camRot = GetGameplayCamRot()
         local camCoord = GetGameplayCamCoord()
@@ -59,15 +160,8 @@ do
         return hit, endCoords, surfaceNormal, entityHit
     end
 
-    function RotAnglesToVec(rot)
-        local z = math.rad(rot.z)
-        local x = math.rad(rot.x)
-        local num = math.abs(math.cos(x))
-
-        return vector3(-math.sin(z) * num, math.cos(z) * num, math.sin(x))
-    end
-
     local function playerMoved()
+        local cfg = Config.AntiAFK
         local ped = PlayerPedId()
         local pos = GetEntityCoords(ped)
 
@@ -76,22 +170,19 @@ do
             return true
         end
 
-        -- Distanzcheck
         local dist = #(pos - lastPos)
-        if dist > 0.15 then
+        if dist > cfg.MoveThreshold then
             lastPos = pos
             return true
         end
 
-        -- Velocity check
         local vel = GetEntityVelocity(ped)
-        if #(vel) > 0.1 then
+        if #(vel) > cfg.VelocityThreshold then
             lastPos = pos
             return true
         end
 
-        -- Raycast check (Bewegung im Raum)
-        local hit, _, _, _ = RayCastGamePlayCamera(5.0)
+        local hit = RayCastGamePlayCamera(cfg.CamRayCastDist)
         if hit then
             lastPos = pos
             return true
@@ -102,11 +193,34 @@ do
 
     CreateThread(function()
         while true do
-            Wait(1000)
+            local cfg = Config.AntiAFK
+            Wait(cfg.CheckIntervalMs)
+
+            if not cfg.Enabled then
+                goto continue
+            end
 
             if playerMoved() then
                 updateActivity()
+                goto continue
             end
+
+            local elapsedMs = GetGameTimer() - lastActivity
+            local elapsedMin = elapsedMs / 60000.0
+            local remainingSec = math.floor((cfg.KickAfterMinutes * 60) - (elapsedMs / 1000))
+
+            if cfg.WarnBeforeKick and (not warned) and remainingSec <= cfg.WarnSecondsBefore and remainingSec > 0 then
+                warned = true
+                BeginTextCommandThefeedPost("STRING")
+                AddTextComponentSubstringPlayerName(string.format(cfg.WarnMessage, remainingSec))
+                EndTextCommandThefeedPostTicker(true, true)
+            end
+
+            if elapsedMin >= cfg.KickAfterMinutes then
+                TriggerServerEvent('mc_core:afkKickCheck')
+            end
+
+            ::continue::
         end
     end)
 end
@@ -117,10 +231,6 @@ end
 -- ============================================================
 do
     local ESX = exports["es_extended"]:getSharedObject()
-
-    -------------------------------------------------
-    -- CRAFT BLIPS
-    -------------------------------------------------
 
     local CraftBlips = {}
     local craftBlipsVisible = GetResourceKvpString("crafter_blips_visible") ~= "0"
@@ -138,13 +248,11 @@ do
     CreateThread(function()
         if not Config.CraftZones then return end
 
-        -- Nur alte Craft-Blips löschen
         for _, blip in pairs(CraftBlips) do
             if DoesBlipExist(blip) then RemoveBlip(blip) end
         end
         CraftBlips = {}
 
-        -- Neue Craft-Blips erstellen
         for _, zone in pairs(Config.CraftZones) do
             if zone.blip and zone.blip.enabled ~= false then
 
@@ -168,12 +276,8 @@ do
 
     RegisterCommand("craftblips", function()
         SetCraftBlipsVisible(not craftBlipsVisible)
-        ESX.ShowNotification(craftBlipsVisible and "~g~Crafter-Blips aktiviert" or "~r~Crafter-Blips deaktiviert")
+        MC_Notify("Crafter", craftBlipsVisible and "Crafter-Blips aktiviert" or "Crafter-Blips deaktiviert", craftBlipsVisible and "success" or "error")
     end)
-
-    -------------------------------------------------
-    -- ox_target
-    -------------------------------------------------
 
     CreateThread(function()
         if not Config.UseOxTarget then return end
@@ -202,10 +306,6 @@ do
             })
         end
     end)
-
-    -------------------------------------------------
-    -- MARKER + E-INTERAKTION
-    -------------------------------------------------
 
     CreateThread(function()
         while true do
@@ -241,7 +341,7 @@ do
                         end
 
                         if dist < (zone.radius or 2.0) then
-                            ESX.ShowHelpNotification("Drücke ~INPUT_CONTEXT~, um den Crafter zu öffnen.")
+                            MC_NotifyHelp("Drücke ~INPUT_CONTEXT~, um den Crafter zu öffnen.")
 
                             if IsControlJustPressed(0, 38) then
                                 SendNUIMessage({
@@ -260,10 +360,6 @@ do
             Wait(sleep)
         end
     end)
-
-    -------------------------------------------------
-    -- NUI CALLBACKS
-    -------------------------------------------------
 
     RegisterNUICallback("craft", function(data, cb)
         TriggerServerEvent("mc_core:craftItem", data)
@@ -298,21 +394,17 @@ do
         while true do
             SetDiscordAppId(Config.DiscordAppId)
 
-            -- Großer Button
             SetDiscordRichPresenceAsset(Config.DiscordLogo)
             SetDiscordRichPresenceAssetText(Config.DiscordLogoText)
 
-            -- Kleiner Button
             SetDiscordRichPresenceAssetSmall(Config.DiscordSmallLogo)
             SetDiscordRichPresenceAssetSmallText(Config.DiscordSmallLogoText)
 
-            -- Status
             SetRichPresence(Config.DiscordStatusFormat:format(
                 #GetActivePlayers(),
                 GetPlayerServerId(PlayerId())
             ))
 
-            -- Buttons
             SetDiscordRichPresenceAction(0, Config.DiscordButton1Label, Config.DiscordButton1Url)
             SetDiscordRichPresenceAction(1, Config.DiscordButton2Label, Config.DiscordButton2Url)
 
@@ -326,26 +418,10 @@ end
 -- SECTION: elevator.lua
 -- ============================================================
 do
-    -- AUTO-DETECT NOTIFY
-    local function CoreNotifyHelp(msg)
-        if TriggerEvent("mc_core:notify:help", msg) then return end
-        if TriggerEvent("mc_core:notifyHelp", msg) then return end
-        if TriggerEvent("mc_core:helpnotify", msg) then return end
-        if TriggerEvent("hex_hud:notify", msg) then return end
-        if TriggerEvent("hex_hud:announce", "Hinweis", msg, 3000) then return end
-
-        -- Fallback
-        SetTextComponentFormat("STRING")
-        AddTextComponentString(msg)
-        DisplayHelpTextFromStringLabel(0, false, true, -1)
-    end
-
-    -- AUTO-DETECT MENU
     local function CoreOpenMenu(title, options)
         if TriggerEvent("mc_core:menu:open", title, options) then return end
         if TriggerEvent("hex_hud:menu:open", title, options) then return end
 
-        -- Fallback GTA menu
         print("Kein Menüsystem gefunden – Fallback aktiv")
         for i,v in ipairs(options) do
             print(i .. ": " .. v.title)
@@ -367,7 +443,7 @@ do
             opts[#opts+1] = {
                 title = floor.label,
                 action = function()
-                    TriggerEvent("mc_core:notify", "Fahrstuhl", "Fahre zu: "..floor.label, 3000)
+                    MC_Notify("Fahrstuhl", "Fahre zu: "..floor.label, "info", 3000)
                     FadeTeleport(floor.coords)
                 end
             }
@@ -392,7 +468,7 @@ do
                         0,0,0, 0,0,0, 0.25,0.25,0.25, 0,120,255,180, false,true,2,false)
 
                     if dist < 1.4 then
-                        CoreNotifyHelp("Drücke ~INPUT_CONTEXT~ für Fahrstuhl")
+                        MC_NotifyHelp("Drücke ~INPUT_CONTEXT~ für Fahrstuhl")
 
                         if IsControlJustPressed(0, ElevatorConfig.Key) then
                             OpenElevatorMenu(elevator)
@@ -413,7 +489,7 @@ end
 do
     RegisterNetEvent('mc_event:announce')
     AddEventHandler('mc_event:announce', function(title, msg, timeout)
-        TriggerEvent('hex_hud:announce', title, msg, timeout)
+        MC_Notify(title, msg, "info", timeout)
     end)
 end
 
@@ -422,15 +498,9 @@ end
 -- SECTION: farming.lua
 -- ============================================================
 do
-    local ESX = exports["es_extended"]:getSharedObject()
-
     local isFarming = false
     local currentFarm = nil
     local farmingThread = nil
-
-    -------------------------------------------------
-    -- Blips
-    -------------------------------------------------
 
     CreateThread(function()
         for name, farm in pairs(Config.Farming) do
@@ -446,10 +516,6 @@ do
             end
         end
     end)
-
-    -------------------------------------------------
-    -- Marker + Zone Detection
-    -------------------------------------------------
 
     CreateThread(function()
         while true do
@@ -482,10 +548,6 @@ do
         end
     end)
 
-    -------------------------------------------------
-    -- Moderner Fortschrittsbalken (Glow + Gradient)
-    -------------------------------------------------
-
     function FarmingProgress(seconds)
         local start = GetGameTimer()
         local finish = start + (seconds * 1000)
@@ -498,10 +560,8 @@ do
             if progress < 0 then progress = 0 end
             if progress > 1 then progress = 1 end
 
-            -- Hintergrund
             DrawRect(0.50, 0.92, 0.22, 0.030, 10, 10, 14, 180)
 
-            -- Fortschritt
             DrawRect(
                 0.39 + (progress * 0.11),
                 0.92,
@@ -510,7 +570,6 @@ do
                 74, 163, 255, 255
             )
 
-            -- Glow
             DrawRect(
                 0.39 + (progress * 0.11),
                 0.92,
@@ -519,7 +578,6 @@ do
                 74, 163, 255, 120
             )
 
-            -- Text
             SetTextFont(4)
             SetTextScale(0.40, 0.40)
             SetTextColour(255, 255, 255, 255)
@@ -532,10 +590,6 @@ do
         end
     end
 
-    -------------------------------------------------
-    -- Auto-Farming starten
-    -------------------------------------------------
-
     function StartFarming(farmName)
         if isFarming then return end
 
@@ -545,7 +599,7 @@ do
         isFarming = true
         currentFarm = farmName
 
-        ESX.ShowNotification("~g~Auto-Farming gestartet.")
+        MC_Notify("Farming", "Auto-Farming gestartet.", "success")
 
         farmingThread = CreateThread(function()
             while isFarming do
@@ -553,14 +607,12 @@ do
                 local ped = PlayerPedId()
                 local coords = GetEntityCoords(ped)
 
-                -- Zone verlassen
                 if #(coords - farm.coords) > farm.zonesize then
-                    ESX.ShowNotification("~r~Zone verlassen – Auto-Farming gestoppt.")
+                    MC_Notify("Farming", "Zone verlassen – Auto-Farming gestoppt.", "error")
                     StopFarming()
                     break
                 end
 
-                -- Animation
                 if farm.animation then
                     RequestAnimDict(farm.animation.animDictionary)
                     while not HasAnimDictLoaded(farm.animation.animDictionary) do
@@ -577,10 +629,8 @@ do
                     )
                 end
 
-                -- Fortschrittsbalken → erst wenn voll → Item
                 FarmingProgress(farm.time)
 
-                -- Jetzt erst Item geben
                 TriggerServerEvent("mc_core:farming:collect", farmName)
 
                 Wait(250)
@@ -589,57 +639,41 @@ do
         end)
     end
 
-    -------------------------------------------------
-    -- Auto-Farming stoppen
-    -------------------------------------------------
-
     function StopFarming()
         isFarming = false
         currentFarm = nil
         ClearPedTasks(PlayerPedId())
     end
 
-    -------------------------------------------------
-    -- Taste E → Start/Stop
-    -------------------------------------------------
-
     CreateThread(function()
         while true do
             Wait(0)
 
             if currentFarm then
-                ESX.ShowHelpNotification("~INPUT_CONTEXT~ Auto-Farming starten/stoppen")
+                MC_NotifyHelp("~INPUT_CONTEXT~ Auto-Farming starten/stoppen")
 
-                if IsControlJustPressed(0, 38) then -- E
+                if IsControlJustPressed(0, 38) then
                     if not isFarming then
                         StartFarming(currentFarm)
                     else
                         StopFarming()
-                        ESX.ShowNotification("~r~Auto-Farming beendet.")
+                        MC_Notify("Farming", "Auto-Farming beendet.", "error")
                     end
                 end
             end
         end
     end)
 
-    -------------------------------------------------
-    -- Taste X → Stop
-    -------------------------------------------------
-
     CreateThread(function()
         while true do
             Wait(0)
 
-            if isFarming and IsControlJustPressed(0, 73) then -- X
+            if isFarming and IsControlJustPressed(0, 73) then
                 StopFarming()
-                ESX.ShowNotification("~r~Auto-Farming beendet.")
+                MC_Notify("Farming", "Auto-Farming beendet.", "error")
             end
         end
     end)
-
-    -------------------------------------------------
-    -- Anti AFK
-    -------------------------------------------------
 
     local lastPosition = vector3(0.0,0.0,0.0)
     local afkCounter = 0
@@ -662,7 +696,7 @@ do
 
                 if afkCounter >= 12 then
                     StopFarming()
-                    ESX.ShowNotification("~r~Auto-Farming wegen Inaktivität beendet.")
+                    MC_Notify("Farming", "Auto-Farming wegen Inaktivität beendet.", "error")
                 end
             end
         end
@@ -674,25 +708,13 @@ end
 -- SECTION: Fraktionssperre.lua
 -- ============================================================
 do
-    -- ============================================================
-    --  NOTIFICATION HANDLER
-    --  hex_hud_notify hört bereits selbst auf FraksperreConfig.Notify.event
-    --  ("esx:showNotification") und zeigt die Notification an.
-    --  Hier daher KEINEN eigenen Handler mehr registrieren, sonst kommt
-    --  die Notification doppelt (einmal von hex_hud_notify, einmal von uns).
-    -- ============================================================
-
     RegisterNetEvent(FraksperreConfig.Notify.helpEvent)
     AddEventHandler(FraksperreConfig.Notify.helpEvent, function(message)
-        -- Ausführliche Hilfe-Notification (z.B. beim Connect)
         BeginTextCommandDisplayHelp("STRING")
         AddTextComponentSubstringPlayerName(message)
         EndTextCommandDisplayHelp(0, false, true, -1)
     end)
 
-    -- ============================================================
-    --  CHAT SUGGESTIONS FÜR ADMINS
-    -- ============================================================
     CreateThread(function()
         local C = FraksperreConfig.Commands
 
@@ -721,12 +743,12 @@ do
         local playerPed = PlayerPedId()
         local coords = GetEntityCoords(playerPed)
         local heading = GetEntityHeading(playerPed)
+        local ESX = exports["es_extended"]:getSharedObject()
 
         ESX.Game.SpawnVehicle(model, coords, heading, function(vehicle)
             SetVehicleNumberPlateText(vehicle, plate)
             SetPedIntoVehicle(playerPed, vehicle, -1)
 
-            -- Fahrzeug sicher machen
             SetVehicleOnGroundProperly(vehicle)
             SetVehicleHasBeenOwnedByPlayer(vehicle, true)
             SetEntityAsMissionEntity(vehicle, true, true)
@@ -767,9 +789,9 @@ do
                 if dist < 2.0 then
                     DrawText3D(data.coords.x, data.coords.y, data.coords.z + 0.2, "~g~E~w~ drücken um zu klingeln")
 
-                    if IsControlJustPressed(0, 38) then -- E Taste
+                    if IsControlJustPressed(0, 38) then
                         if (GetGameTimer() - lastPress) < Config.Klingel.Cooldown then
-                            ESX.ShowNotification("⏳ Bitte warte kurz…")
+                            MC_Notify("Klingel", "Bitte warte kurz…", "warning")
                         else
                             lastPress = GetGameTimer()
                             TriggerServerEvent("mc_core:klingel:trigger", job)
@@ -786,8 +808,6 @@ end
 -- SECTION: labor.lua
 -- ============================================================
 do
-    local ESX = exports["es_extended"]:getSharedObject()
-
     if not Config then
         print("^1[mc_core] Config konnte nicht geladen werden!^7")
         return
@@ -818,10 +838,6 @@ do
         end
 
     end)
-
-    -------------------------------------------------
-    -- Ox Target
-    -------------------------------------------------
 
     CreateThread(function()
 
@@ -875,10 +891,6 @@ do
 
     end)
 
-    -------------------------------------------------
-    -- Marker
-    -------------------------------------------------
-
     CreateThread(function()
 
         while true do
@@ -931,7 +943,7 @@ do
 
                         if dist < lab.radius then
 
-                            ESX.ShowHelpNotification("Drücke ~INPUT_CONTEXT~ um das Labor zu öffnen")
+                            MC_NotifyHelp("Drücke ~INPUT_CONTEXT~ um das Labor zu öffnen")
 
                             if IsControlJustPressed(0,38) then
 
@@ -965,10 +977,6 @@ do
 
     end)
 
-    -------------------------------------------------
-    -- Server Status
-    -------------------------------------------------
-
     RegisterNetEvent("mc_core:sendLaborStatus",function(data)
 
         SendNUIMessage({
@@ -984,10 +992,6 @@ do
         })
 
     end)
-
-    -------------------------------------------------
-    -- NUI
-    -------------------------------------------------
 
     RegisterNUICallback("deposit",function(data,cb)
 
@@ -1016,11 +1020,12 @@ end
 
 
 -- ============================================================
--- SECTION: maut.lua
+-- SECTION: maut.lua 
 -- ============================================================
 do
-    local insideToll = {} -- [toll.name] = true/false, pro Mautstelle statt global
-    local EXIT_BUFFER = 5.0 -- Meter Puffer: verhindert Flackern am Rand des Radius (Bodenwellen, Federung etc.)
+    local insideToll = {}
+    local processingToll = {}
+    local EXIT_BUFFER = 15.0 -- größerer Puffer gegen Zittern am Zonenrand
 
     CreateThread(function()
         while true do
@@ -1028,56 +1033,54 @@ do
             local ped = PlayerPedId()
 
             if IsPedInAnyVehicle(ped, false) then
-                sleep = 0
-
                 local veh = GetVehiclePedIsIn(ped, false)
-                local coords = GetEntityCoords(veh)
-                local speed = GetEntitySpeed(veh) * 3.6 -- km/h
+                local isDriver = (GetPedInVehicleSeat(veh, -1) == ped)
 
-                for _, toll in ipairs(MautConfig.Tolls) do
-                    local dist = #(coords - toll.coords)
+                if isDriver then
+                    sleep = 0
 
-                    if dist <= toll.radius then
+                    local coords = GetEntityCoords(veh)
+                    local speed = GetEntitySpeed(veh) * 3.6
 
-                        -- Nur beim EINTRITT in diese eine Mautstelle abrechnen,
-                        -- nicht erneut, solange man noch drin steht
-                        if not insideToll[toll.name] then
-                            insideToll[toll.name] = true
+                    for _, toll in ipairs(MautConfig.Tolls) do
+                        local dist = #(coords - toll.coords)
 
-                            local dynamicPrice = MautConfig.Price
+                        if dist <= toll.radius then
 
-                            -- 350+ km/h = Mindestpreis + dynamisch weiter
-                            if speed >= 350 then
-                                dynamicPrice = math.floor(
-                                    MautConfig.HighSpeedBase + ((speed - 350) * MautConfig.SpeedFactor)
-                                )
+                            -- Eintritt: nur EINMAL pro Aufenthalt in der Zone
+                            if not insideToll[toll.name] and not processingToll[toll.name] then
+                                processingToll[toll.name] = true
+                                insideToll[toll.name] = true
 
-                            -- über 50 km/h = dynamischer Preis
-                            elseif speed > 50 then
-                                dynamicPrice = math.floor(
-                                    MautConfig.Price + ((speed - 50) * MautConfig.SpeedFactor)
-                                )
+                                local dynamicPrice = MautConfig.Price
+
+                                if speed >= 350 then
+                                    dynamicPrice = math.floor(
+                                        MautConfig.HighSpeedBase + ((speed - 350) * MautConfig.SpeedFactor)
+                                    )
+                                elseif speed > 50 then
+                                    dynamicPrice = math.floor(
+                                        MautConfig.Price + ((speed - 50) * MautConfig.SpeedFactor)
+                                    )
+                                end
+
+                                TriggerServerEvent("mc_core:maut:pay", toll.name, dynamicPrice, speed)
+
+                                if speed >= 200 then
+                                    TriggerServerEvent("mc_core:maut:policeAlert", toll.name, dynamicPrice, speed)
+                                end
+
+                                processingToll[toll.name] = false
                             end
 
-                            -- Notify für Fahrer
-                            TriggerEvent("mc_core:notify", "Mautstelle",
-                                ("Speed: %.1f km/h | Preis: %s$"):format(speed, dynamicPrice)
-                            )
-
-                            -- Zahlung
-                            TriggerServerEvent("mc_core:maut:pay", toll.name, dynamicPrice, speed)
-
-                            -- Polizei‑Alarm ab 200 km/h
-                            if speed >= 200 then
-                                TriggerServerEvent("mc_core:maut:policeAlert", toll.name, dynamicPrice, speed)
+                        elseif dist > toll.radius + EXIT_BUFFER then
+                            -- Austritt: dem Server explizit melden, damit die Sperre aufgehoben wird
+                            if insideToll[toll.name] then
+                                insideToll[toll.name] = false
+                                processingToll[toll.name] = false
+                                TriggerServerEvent("mc_core:maut:exit", toll.name)
                             end
                         end
-
-                    elseif dist > toll.radius + EXIT_BUFFER then
-                        -- Erst HIER wieder scharf machen (Radius + Puffer), NICHT direkt
-                        -- am Rand des Radius. Zwischen Radius und Radius+Puffer bleibt der
-                        -- Zustand unverändert -> kein Retrigger durch kleines Wackeln.
-                        insideToll[toll.name] = false
                     end
                 end
             end
@@ -1087,25 +1090,16 @@ do
     end)
 end
 
-
 -- ============================================================
 -- SECTION: mechanic_client.lua
 -- ============================================================
 do
-    -- Konsolidierte Client‑Datei für mc_core (vsMechanic / Insurance)
-    -- Angepasst an deine config.lua (ESX)
-
-    -- Erwartet: config.lua mit Feldern wie in deiner Vorlage
-    -- Framework: ESX (Config.Framework == 'esx')
-
-    -- Globals / Cache
-    local currentInsuranceTier = "basic"        -- Standardwert bis DB geladen
-    local insuranceCache = {}                  -- cache: plate -> tier
+    local currentInsuranceTier = "basic"
+    local insuranceCache = {}
     local insuranceNPC = nil
     local lastDrivenVeh = 0
     local lastDrivenPlate = nil
 
-    -- Hilfsfunktion: Tier‑Dauern aus Config holen
     local function getTierDurations(tier)
         if tier == 'basic' then
             return Config.MechanicDurationBasic, Config.RepairDurationBasic, Config.RequiredMechanicBasic
@@ -1115,13 +1109,9 @@ do
             return Config.MechanicDurationPremium, Config.RepairDurationPremium, Config.RequiredMechanicPremium
         end
 
-        -- Fallback
         return Config.MechanicDurationBasic, Config.RepairDurationBasic, Config.RequiredMechanicBasic
     end
 
-    -- =========================
-    -- NPC + Blip erstellen
-    -- =========================
     CreateThread(function()
         if not Config or not Config.MechanicInsuranceNPC or not Config.MechanicInsuranceLocation then
             print("^1[mc_vsMechanic] Config missing or incomplete^7")
@@ -1150,9 +1140,6 @@ do
         end
     end)
 
-    -- =========================
-    -- DrawText & Interaktion am NPC
-    -- =========================
     CreateThread(function()
         while true do
             Wait(0)
@@ -1175,16 +1162,13 @@ do
                     DrawText(Config.DrawX or 0.4, Config.DrawY or 0.005)
                 end
 
-                if IsControlJustPressed(0, Config.Key or 38) then -- 38 = E
+                if IsControlJustPressed(0, Config.Key or 38) then
                     OpenInsuranceMenu()
                 end
             end
         end
     end)
 
-    -- =========================
-    -- NUI / Menu öffnen (NUI bevorzugt)
-    -- =========================
     function OpenInsuranceMenu()
         local playerPed = PlayerPedId()
         local veh = GetVehiclePedIsIn(playerPed, false)
@@ -1194,14 +1178,12 @@ do
             plate = GetVehicleNumberPlateText(veh)
         end
 
-        -- Preise aus Config zusammenstellen (nutzt deine Config-Felder)
         local tiers = {
-            basic = { price = Config.MechanicInsuranceBasicCost or Config.MechanicInsuranceBasicCost or 100 },
+            basic = { price = Config.MechanicInsuranceBasicCost or 100 },
             default = { price = Config.MechanicInsuranceDefaultCost or 250 },
             premium = { price = Config.MechanicInsurancePremiumCost or 500 }
         }
 
-        -- UI zurücksetzen (falls vorhanden)
         SendNUIMessage({ action = "resetInsuranceUI" })
 
         SetNuiFocus(true, true)
@@ -1213,7 +1195,6 @@ do
         })
     end
 
-    -- Optional: NUI mit Premium vorauswählen
     function OpenInsuranceMenuWithPremiumPreselect()
         local playerPed = PlayerPedId()
         local veh = GetVehiclePedIsIn(playerPed, false)
@@ -1238,28 +1219,18 @@ do
         })
     end
 
-    -- =========================
-    -- NUI Callbacks
-    -- =========================
     RegisterNUICallback("selectInsurance", function(data, cb)
         if not data or not data.tier or not data.plate then
             cb("error")
             return
         end
 
-        -- Lokal speichern (optimistisch)
         insuranceCache[data.plate] = data.tier
         currentInsuranceTier = data.tier
 
-        -- Server informieren und in DB speichern (Server implementiert DB logic)
         TriggerServerEvent("mc_insurance:buy", data.tier, data.plate)
 
-        -- Feedback an Spieler (lokal)
-        if Config and type(Config.Message) == "function" then
-            Config.Message("Versicherung abgeschlossen: " .. tostring(data.tier) .. " für " .. tostring(data.plate))
-        else
-            print("[mc_vsMechanic] Versicherung abgeschlossen: " .. tostring(data.tier) .. " für " .. tostring(data.plate))
-        end
+        MC_Notify("Versicherung", ("Versicherung abgeschlossen: %s für %s"):format(tostring(data.tier), tostring(data.plate)), "success")
 
         cb("ok")
     end)
@@ -1269,15 +1240,11 @@ do
         cb("ok")
     end)
 
-    -- =========================
-    -- Server Events: Set Insurance Tier (z.B. nach DB fetch)
-    -- =========================
     RegisterNetEvent("mc_insurance:setTier")
     AddEventHandler("mc_insurance:setTier", function(plate, tier)
         if not plate or not tier then return end
         insuranceCache[plate] = tier
 
-        -- Wenn Spieler aktuell in diesem Fahrzeug sitzt, aktualisiere currentInsuranceTier
         local veh = GetVehiclePedIsIn(PlayerPedId(), false)
         if veh ~= 0 then
             local myPlate = GetVehicleNumberPlateText(veh)
@@ -1287,12 +1254,8 @@ do
         end
     end)
 
-    -- =========================
-    -- Request flow: Server fordert Reparatur mit Versicherung
-    -- =========================
     RegisterNetEvent("mc_vsMechanic:requestWithInsurance")
     AddEventHandler("mc_vsMechanic:requestWithInsurance", function(onlineMechs)
-        -- Bestimme aktuelles Fahrzeug und Kennzeichen
         local ped = PlayerPedId()
         local veh = GetVehiclePedIsIn(ped, false)
         local plate = nil
@@ -1300,7 +1263,6 @@ do
             plate = GetVehicleNumberPlateText(veh)
         end
 
-        -- Wenn Kennzeichen im Cache vorhanden, nutze dessen Tier, sonst currentInsuranceTier oder basic
         local tier = "basic"
         if plate and insuranceCache[plate] then
             tier = insuranceCache[plate]
@@ -1310,22 +1272,14 @@ do
 
         local mechDuration, repairDuration, requiredMechs = getTierDurations(tier)
 
-        -- Wenn genug Mechaniker online sind, abbrechen (Logik: onlineMechs >= requiredMechs)
         if onlineMechs >= requiredMechs then
-            if Config and type(Config.Message) == "function" then
-                Config.Message("Es sind genug Mechaniker online für deine Versicherungsstufe.")
-            else
-                print("[mc_vsMechanic] Es sind genug Mechaniker online für deine Versicherungsstufe.")
-            end
+            MC_Notify("Mechaniker", "Es sind genug Mechaniker online für deine Versicherungsstufe.", "info")
             return
         end
 
         TriggerEvent('mc_vsMechanic:spawnNPCMechanic', mechDuration, repairDuration, 0)
     end)
 
-    -- =========================
-    -- Spawn Mechaniker NPC, fährt zum Spieler, repariert Fahrzeug
-    -- =========================
     RegisterNetEvent('mc_vsMechanic:spawnNPCMechanic')
     AddEventHandler('mc_vsMechanic:spawnNPCMechanic', function(mechDuration, repairDuration, cost)
         local ped = PlayerPedId()
@@ -1349,14 +1303,14 @@ do
 
         TaskVehicleDriveToCoord(npc, veh, pCoords.x, pCoords.y, pCoords.z, 20.0, 1.0, GetHashKey(Config.MechanicVehicle), 786603, 1.0)
 
-        TriggerEvent('mc_vsMechanic:notify', "Mechaniker ist unterwegs...")
+        MC_Notify("Mechaniker", "Mechaniker ist unterwegs...", "info")
 
         Wait(mechDuration * 1000)
 
         TaskLeaveVehicle(npc, veh, 0)
         Wait(2000)
 
-        TriggerEvent('mc_vsMechanic:notify', "Reparatur gestartet...")
+        MC_Notify("Mechaniker", "Reparatur gestartet...", "info")
 
         Wait(repairDuration * 1000)
 
@@ -1366,9 +1320,8 @@ do
             SetVehicleEngineHealth(vehicle, 1000.0)
         end
 
-        TriggerEvent('mc_vsMechanic:notify', "Fahrzeug repariert!")
+        MC_Notify("Mechaniker", "Fahrzeug repariert!", "success")
 
-        -- NPC und Fahrzeug aufräumen
         if DoesEntityExist(npc) then
             DeleteEntity(npc)
         end
@@ -1377,54 +1330,28 @@ do
         end
     end)
 
-    -- =========================
-    -- Notification Event (lokal)
-    -- =========================
-    RegisterNetEvent('mc_vsMechanic:notify')
-    AddEventHandler('mc_vsMechanic:notify', function(msg)
-        if Config and type(Config.Message) == "function" then
-            Config.Message(msg)
-        else
-            print("[mc_vsMechanic] " .. tostring(msg))
-        end
-    end)
-
-    -- =========================
-    -- Helper: Request Insurance for current vehicle (fragt Server nach DB‑Wert)
-    -- =========================
     function RequestInsuranceForCurrentVehicle()
         local ped = PlayerPedId()
         local veh = GetVehiclePedIsIn(ped, false)
         if veh == 0 then
-            if Config and type(Config.Message) == "function" then
-                Config.Message("Du sitzt in keinem Fahrzeug.")
-            else
-                print("[mc_vsMechanic] Du sitzt in keinem Fahrzeug.")
-            end
+            MC_Notify("Versicherung", "Du sitzt in keinem Fahrzeug.", "error")
             return
         end
 
         local plate = GetVehicleNumberPlateText(veh)
         if not plate or plate == "" then
-            if Config and type(Config.Message) == "function" then
-                Config.Message("Kein Kennzeichen gefunden.")
-            else
-                print("[mc_vsMechanic] Kein Kennzeichen gefunden.")
-            end
+            MC_Notify("Versicherung", "Kein Kennzeichen gefunden.", "error")
             return
         end
 
         TriggerServerEvent("mc_insurance:getForPlate", plate)
     end
 
-    -- =========================
-    -- Track zuletzt gefahrenes Fahrzeug (für "Buy Premium last driven")
-    -- =========================
     CreateThread(function()
         while true do
             Wait(1000)
             local ped = PlayerPedId()
-            local veh = GetVehiclePedIsIn(ped, true) -- true = last vehicle too
+            local veh = GetVehiclePedIsIn(ped, true)
             if veh ~= 0 and veh ~= lastDrivenVeh then
                 lastDrivenVeh = veh
                 local plate = GetVehicleNumberPlateText(veh)
@@ -1435,42 +1362,24 @@ do
         end
     end)
 
-    -- =========================
-    -- Funktion: Premium für zuletzt gefahrenes Fahrzeug kaufen/setzen
-    -- =========================
     function BuyPremiumForLastDrivenVehicle()
         if not lastDrivenPlate or lastDrivenPlate == "" then
-            if Config and type(Config.Message) == "function" then
-                Config.Message("Kein zuletzt gefahrenes Fahrzeug gefunden.")
-            else
-                print("[mc_vsMechanic] Kein zuletzt gefahrenes Fahrzeug gefunden.")
-            end
+            MC_Notify("Versicherung", "Kein zuletzt gefahrenes Fahrzeug gefunden.", "error")
             return
         end
 
-        -- Lokal speichern (optimistisch)
         insuranceCache[lastDrivenPlate] = "premium"
         currentInsuranceTier = "premium"
 
-        -- Server informieren, DB‑Speicherung übernimmt der Server
         TriggerServerEvent("mc_insurance:buy", "premium", lastDrivenPlate)
 
-        -- Feedback an Spieler
-        if Config and type(Config.Message) == "function" then
-            Config.Message("Premium‑Versicherung abgeschlossen für " .. lastDrivenPlate)
-        else
-            print("[mc_vsMechanic] Premium‑Versicherung abgeschlossen für " .. lastDrivenPlate)
-        end
+        MC_Notify("Versicherung", "Premium‑Versicherung abgeschlossen für " .. lastDrivenPlate, "success")
     end
 
-    -- Optional: Kommando zum Testen (nur während Entwicklung)
     RegisterCommand("buyPremiumLast", function()
         BuyPremiumForLastDrivenVehicle()
     end, false)
 
-    -- =========================
-    -- Auto‑Update currentInsuranceTier beim Fahrzeugwechsel
-    -- =========================
     CreateThread(function()
         local lastVeh = 0
         while true do
@@ -1484,7 +1393,6 @@ do
                     if plate and insuranceCache[plate] then
                         currentInsuranceTier = insuranceCache[plate]
                     else
-                        -- Fordere Server an, falls nicht im Cache
                         TriggerServerEvent("mc_insurance:getForPlate", plate)
                     end
                 end
@@ -1492,9 +1400,6 @@ do
         end
     end)
 
-    -- =========================
-    -- Exports (für andere mc_core Module)
-    -- =========================
     exports('GetInsuranceTierForPlate', function(plate)
         return insuranceCache[plate] or "basic"
     end)
@@ -1509,8 +1414,6 @@ end
 -- SECTION: moneywash.lua
 -- ============================================================
 do
-    local ESX = exports["es_extended"]:getSharedObject()
-
     if not Config or not Config.Moneywash then
         print("^1[mc_core] Moneywash-Konfiguration konnte nicht geladen werden!^7")
         return
@@ -1519,10 +1422,6 @@ do
     local MW = Config.Moneywash
     local moneywashBlips = {}
     local moneywashOpen = false
-
-    -------------------------------------------------
-    -- Blips
-    -------------------------------------------------
 
     CreateThread(function()
         for _, loc in ipairs(MW.locations) do
@@ -1542,10 +1441,6 @@ do
         end
     end)
 
-    -------------------------------------------------
-    -- Menü öffnen
-    -------------------------------------------------
-
     local function OpenMoneywashMenu()
         moneywashOpen = true
 
@@ -1562,10 +1457,6 @@ do
 
         TriggerServerEvent("mc_core:getMoneywashStatus")
     end
-
-    -------------------------------------------------
-    -- Ox Target
-    -------------------------------------------------
 
     CreateThread(function()
         if not MW.useOxTarget then return end
@@ -1591,10 +1482,6 @@ do
             })
         end
     end)
-
-    -------------------------------------------------
-    -- Marker + E-Fallback
-    -------------------------------------------------
 
     CreateThread(function()
         while true do
@@ -1626,7 +1513,7 @@ do
 
                         if dist < loc.radius then
 
-                            ESX.ShowHelpNotification("Drücke ~INPUT_CONTEXT~ um Geld zu waschen")
+                            MC_NotifyHelp("Drücke ~INPUT_CONTEXT~ um Geld zu waschen")
 
                             if IsControlJustPressed(0, 38) and not moneywashOpen then
                                 OpenMoneywashMenu()
@@ -1645,10 +1532,6 @@ do
         end
     end)
 
-    -------------------------------------------------
-    -- Server-Status -> NUI
-    -------------------------------------------------
-
     RegisterNetEvent("mc_core:sendMoneywashStatus")
     AddEventHandler("mc_core:sendMoneywashStatus", function(data)
         SendNUIMessage({
@@ -1662,7 +1545,7 @@ do
 
     RegisterNetEvent("mc_core:moneywashPoliceAlert")
     AddEventHandler("mc_core:moneywashPoliceAlert", function(coords, blipMinutes)
-        ESX.ShowNotification("Ein Passant meldet verdächtige Aktivitäten! Position auf der Karte markiert.")
+        MC_Notify("Geldwäsche", "Ein Passant meldet verdächtige Aktivitäten! Position auf der Karte markiert.", "warning")
 
         local blip = AddBlipForCoord(coords.x, coords.y, coords.z)
         SetBlipSprite(blip, MW.policeNotify.blipSprite)
@@ -1678,10 +1561,6 @@ do
             RemoveBlip(blip)
         end)
     end)
-
-    -------------------------------------------------
-    -- NUI
-    -------------------------------------------------
 
     RegisterNUICallback("startMoneywash", function(data, cb)
         TriggerServerEvent("mc_core:startMoneywash", data)
@@ -1707,10 +1586,8 @@ end
 do
     local ESX = exports["es_extended"]:getSharedObject()
 
-    -- Fahrzeuge merken, die bereits von Spielern benutzt wurden
     local PlayerVehicles = {}
 
-    -- Check ob ein Punkt im Radius liegt
     local function InRadius(coords)
         return #(coords - ZoneCenter) <= ZoneRadius
     end
@@ -1730,7 +1607,6 @@ do
 
                         local netId = VehToNet(veh)
 
-                        -- Prüfen ob irgendein Spieler im Fahrzeug sitzt
                         local playerInside = false
 
                         for seat = -1, GetVehicleMaxNumberOfPassengers(veh) - 1 do
@@ -1743,28 +1619,23 @@ do
                             end
                         end
 
-                        -- Spieler sitzt drin -> niemals löschen
                         if playerInside then
                             goto continue
                         end
 
-                        -- Fahrzeug wurde bereits einmal von einem Spieler benutzt
                         if PlayerVehicles[netId] then
                             goto continue
                         end
 
-                        -- Kennzeichen prüfen
                         local plate = ESX.Math.Trim(GetVehicleNumberPlateText(veh))
                         local owned = lib.callback.await("npc_blocker:isOwnedVehicle", false, plate)
 
-                        -- Spielerfahrzeug -> niemals löschen
                         if owned then
                             goto continue
                         end
 
                         local driver = GetPedInVehicleSeat(veh, -1)
 
-                        -- NPC fährt
                         if driver ~= 0 and not IsPedAPlayer(driver) then
                             SetEntityAsMissionEntity(driver, true, true)
                             SetEntityAsMissionEntity(veh, true, true)
@@ -1772,7 +1643,6 @@ do
                             DeletePed(driver)
                             DeleteVehicle(veh)
 
-                        -- Leeres NPC-Fahrzeug
                         elseif driver == 0 then
                             SetEntityAsMissionEntity(veh, true, true)
                             DeleteVehicle(veh)
@@ -1785,7 +1655,6 @@ do
         end
     end)
 
-    -- Debug Kreis
     CreateThread(function()
         while DebugNPCBlocker do
             Wait(0)
@@ -1819,7 +1688,7 @@ do
         purge = true
         purgeEnd = GetGameTimer() + (duration * 1000)
 
-        TriggerEvent('hex_hud:announce', "🔥 PURGE AKTIV", "Alle Gesetze sind außer Kraft!", 8000)
+        MC_Notify("🔥 PURGE AKTIV", "Alle Gesetze sind außer Kraft!", "warning", 8000)
 
         if Config.Purge.GiveWeapons then
             for _,weapon in ipairs(Config.Purge.Weapons) do
@@ -1837,21 +1706,20 @@ do
         purge = false
         StopScreenEffect("DrugsTrevorClownsFight")
 
-        TriggerEvent('hex_hud:announce', "🧊 PURGE ENDE", "Die Stadt kehrt zur Normalität zurück.", 8000)
+        MC_Notify("🧊 PURGE ENDE", "Die Stadt kehrt zur Normalität zurück.", "info", 8000)
     end)
 
     CreateThread(function()
         while true do
-            Wait(200) -- leicht verzögert, kein Spam
+            Wait(200)
 
             if purge then
                 local remaining = math.floor((purgeEnd - GetGameTimer()) / 1000)
 
-                -- Nur die letzten 5 Sekunden anzeigen
                 if remaining <= 5 and remaining > 0 then
                     if remaining ~= lastNotify then
                         lastNotify = remaining
-                        TriggerEvent('hex_hud:notify', "Purge endet", remaining .. " Sekunden", "warning", 1200)
+                        MC_Notify("Purge endet", remaining .. " Sekunden", "warning", 1200)
                     end
                 end
             end
@@ -1864,7 +1732,6 @@ end
 -- SECTION: revive.lua
 -- ============================================================
 do
-    local ESX = exports["es_extended"]:getSharedObject()
     local reviveUiOpen = false
 
     function OpenReviveUI()
@@ -1897,7 +1764,7 @@ do
         local ped = PlayerPedId()
 
         if not IsEntityDead(ped) then
-            ESX.ShowNotification("Du bist nicht bewusstlos.")
+            MC_Notify("Revive", "Du bist nicht bewusstlos.", "error")
             CloseReviveUI()
             return
         end
@@ -1910,7 +1777,6 @@ do
         CloseReviveUI()
     end)
 
-    -- Dead-only interaction
     CreateThread(function()
         while true do
             local sleep = 1000
@@ -1922,13 +1788,13 @@ do
                     sleep = 0
 
                     if IsEntityDead(ped) then
-                        ESX.ShowHelpNotification("Drücke ~INPUT_CONTEXT~, um die Revive-Station zu öffnen")
+                        MC_NotifyHelp("Drücke ~INPUT_CONTEXT~, um die Revive-Station zu öffnen")
 
                         if IsControlJustReleased(0, 38) and not reviveUiOpen then
                             OpenReviveUI()
                         end
                     else
-                        ESX.ShowHelpNotification("Nur für bewusstlose Personen verfügbar")
+                        MC_NotifyHelp("Nur für bewusstlose Personen verfügbar")
                     end
                 end
             end
@@ -1941,7 +1807,6 @@ do
         end
     end)
 
-    -- BLIPS
     CreateThread(function()
         if not Config.Revive.Blips.enabled then return end
 
@@ -1959,7 +1824,6 @@ do
         end
     end)
 
-    -- MARKER
     CreateThread(function()
         while true do
             local sleep = 1000
@@ -2006,15 +1870,20 @@ end
 -- ============================================================
 -- SECTION: sperrezone.lua
 -- ============================================================
+-- Sperrzone nutzt bewusst NICHT MC_Notify, sondern direkt
+-- hex_future_hud:announce (großes Banner statt kleiner Toast).
+-- ============================================================
 do
     ESX = exports['es_extended']:getSharedObject()
 
-    local Zones = {}     -- [id] = { id, job, jobLabel, coords, radius, ownerId, ownerName, blip }
+    local Zones = {}
     local PlayerData = {}
 
-    -- ────────────────────────────────────────────────
-    -- ESX player data
-    -- ────────────────────────────────────────────────
+    -- Sperrzone-spezifischer Announce-Helper
+    local function SperrzoneAnnounce(title, msg, timeout)
+        TriggerEvent('hex_future_hud:announce', title, msg, timeout or 10000)
+    end
+
     RegisterNetEvent('esx:playerLoaded', function(xPlayer)
         PlayerData = xPlayer
         TriggerServerEvent('mc_sperrzone:requestSync')
@@ -2030,12 +1899,7 @@ do
         TriggerServerEvent('mc_sperrzone:requestSync')
     end)
 
-    -- ────────────────────────────────────────────────
-    -- Sync: rebuild local zone table + blips whenever the server pushes an update
-    -- (fires on join and on every create/remove)
-    -- ────────────────────────────────────────────────
     RegisterNetEvent('mc_sperrzone:syncAll', function(serverZones)
-        -- remove old blips
         for _, z in pairs(Zones) do
             if z.blip and DoesBlipExist(z.blip) then
                 RemoveBlip(z.blip)
@@ -2079,16 +1943,11 @@ do
         end
     end)
 
-    -- ────────────────────────────────────────────────
-    -- Notify bridge (HEX HUD)
-    -- ────────────────────────────────────────────────
     RegisterNetEvent('mc_sperrzone:notify', function(msg, type)
-
         local title = "Sperrzone"
-        local timeout = 10000
 
         if type == "success" then
-            title = "✅ Sperrzone "
+            title = "✅ Sperrzone"
         elseif type == "error" then
             title = "❌ Sperrzone"
         elseif type == "warning" then
@@ -2097,12 +1956,9 @@ do
             title = "ℹ️ Sperrzone"
         end
 
-        TriggerEvent('hex_hud:announce', title, msg, timeout)
+        SperrzoneAnnounce(title, msg, 10000)
     end)
 
-    -- ────────────────────────────────────────────────
-    -- Draw markers each frame for nearby zones only (perf-friendly)
-    -- ────────────────────────────────────────────────
     CreateThread(function()
         while true do
             local sleep = 500
@@ -2129,16 +1985,10 @@ do
         end
     end)
 
-    -- ────────────────────────────────────────────────
-    -- Helper: is the player currently allowed to create zones?
-    -- ────────────────────────────────────────────────
     local function hasZonePermission()
         return PlayerData.job and Config.Jobs[PlayerData.job.name] ~= nil
     end
 
-    -- ────────────────────────────────────────────────
-    -- Helper: find a zone the local player is standing inside
-    -- ────────────────────────────────────────────────
     local function findZoneImIn()
         local coords = GetEntityCoords(PlayerPedId())
         for id, z in pairs(Zones) do
@@ -2150,13 +2000,9 @@ do
         return nil
     end
 
-    -- ────────────────────────────────────────────────
-    -- Command: create zone
-    -- /sperrzone [radius]
-    -- ────────────────────────────────────────────────
     RegisterCommand(Config.Commands.create, function(source, args)
         if not hasZonePermission() then
-            Config.Notify(_L('no_permission'), 'error')
+            SperrzoneAnnounce("❌ Sperrzone", _L('no_permission'))
             return
         end
 
@@ -2166,14 +2012,10 @@ do
         TriggerServerEvent('mc_sperrzone:create', radius, { x = coords.x, y = coords.y, z = coords.z })
     end, false)
 
-    -- ────────────────────────────────────────────────
-    -- Command: remove zone (must be standing inside one you created)
-    -- /sperrzone_del
-    -- ────────────────────────────────────────────────
     RegisterCommand(Config.Commands.remove, function(source, args)
         local id, zone = findZoneImIn()
         if not id then
-            Config.Notify(_L('not_in_own_zone'), 'error')
+            SperrzoneAnnounce("❌ Sperrzone", _L('not_in_own_zone'))
             return
         end
 
@@ -2181,9 +2023,6 @@ do
         TriggerServerEvent('mc_sperrzone:remove', id, { x = coords.x, y = coords.y, z = coords.z })
     end, false)
 
-    -- ────────────────────────────────────────────────
-    -- Cleanup on resource stop
-    -- ────────────────────────────────────────────────
     AddEventHandler('onResourceStop', function(resourceName)
         if GetCurrentResourceName() ~= resourceName then return end
         for _, z in pairs(Zones) do
@@ -2232,10 +2071,10 @@ do
 
     local rampHash = 'imp_prop_flatbed_ramp'
 
-    function GetVehicleBelowMe(cFrom, cTo) -- Function to get the vehicle under me
-        local rayHandle = CastRayPointToPoint(cFrom.x, cFrom.y, cFrom.z, cTo.x, cTo.y, cTo.z, 10, PlayerPedId(), 0) -- Sends raycast under me
-        local _, _, _, _, vehicle = GetRaycastResult(rayHandle) -- Stores the vehicle under me
-        return vehicle -- Returns the vehicle under me
+    function GetVehicleBelowMe(cFrom, cTo)
+        local rayHandle = CastRayPointToPoint(cFrom.x, cFrom.y, cFrom.z, cTo.x, cTo.y, cTo.z, 10, PlayerPedId(), 0)
+        local _, _, _, _, vehicle = GetRaycastResult(rayHandle)
+        return vehicle
     end
 
     function contains(item, list)
@@ -2246,9 +2085,7 @@ do
     end
 
     function drawNotification(text)
-        SetNotificationTextEntry("STRING")
-        AddTextComponentString(text)
-        DrawNotification(true, false)
+        MC_Notify("Abschleppen", text, "info")
     end
 
     RegisterCommand('rampe', function ()
@@ -2345,13 +2182,10 @@ end
 -- SECTION: verkauf.lua
 -- ============================================================
 do
-    local ESX = exports["es_extended"]:getSharedObject()
-
     CreateThread(function()
         for name, data in pairs(Config.Verkauf) do
             local coords = data.coords
 
-            -- Blip
             if data.blip and data.blip.enabled then
                 local blip = AddBlipForCoord(coords.x, coords.y, coords.z)
                 SetBlipSprite(blip, data.blip.id)
@@ -2363,7 +2197,6 @@ do
                 EndTextCommandSetBlipName(blip)
             end
 
-            -- Marker / Interaktion
             CreateThread(function()
                 while true do
                     local sleep = 1000
@@ -2386,9 +2219,9 @@ do
                             )
                         end
 
-                        ESX.ShowHelpNotification(data.helpmsg)
+                        MC_NotifyHelp(data.helpmsg)
 
-                        if IsControlJustPressed(0, 38) then -- E
+                        if IsControlJustPressed(0, 38) then
                             TriggerServerEvent("mc_core:verkauf:sell", name)
                         end
                     end

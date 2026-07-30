@@ -1,5 +1,17 @@
 Config = Config or {}
 
+
+---------------------------------------------------------------
+-- MODUL: NotifyConfig
+---------------------------------------------------------------
+
+NotifyConfig = {
+    system = "esx",             -- "auto" | "hex_hud" | "ox_lib" | "esx" | "qbcore" | "custom"
+    customEvent = nil,           -- z.B. "mc_core:notify", nur bei system = "custom"
+    customHelpEvent = nil,       -- eigenes Event für Help-Texte, optional
+    defaultDuration = 5000
+}
+
 ---------------------------------------------------------------
 -- MODUL: Abschleppsystem
 ---------------------------------------------------------------
@@ -31,7 +43,41 @@ Config.EnableTowNUI = false
 ---------------------------------------------------------------
 -- MODUL: AntiAFK
 ---------------------------------------------------------------
-Config.AFKWebhook = "https://discord.com/api/webhooks/1524071968049987647/GpQpTSddduT7fibQB0eKPMWI79AzSbG-vXZUqPvCFF8qn2H8qy8vcFlAm6sYj03KmuwR"
+Config.AFKWebhook = "https://discordapp.com/api/webhooks/1532384533775777862/ThzMQljMGZ2eJeqlNmErFe6anwxEcZ1jMzk_vdvKYVhchqfd1tuKuuolrEf-_sunsG4c" -- TODO: eigenen Webhook eintragen
+Config.AntiAFK = {
+    Enabled = true,              -- System an/aus
+    KickAfterMinutes = 5,       -- Nach wie vielen Minuten Inaktivität gekickt wird
+    WarnBeforeKick = true,       -- Vorwarnung anzeigen bevor gekickt wird
+    WarnSecondsBefore = 60,      -- Wie viele Sekunden vor dem Kick gewarnt wird
+    KickMessage = "Du wurdest wegen Inaktivität (AFK) gekickt.",
+    WarnMessage = "Du wirst in %d Sekunden wegen AFK gekickt. Bewege dich, um das zu verhindern!",
+    CheckIntervalMs = 1000,      -- Wie oft der Client die Bewegung prüft
+    MoveThreshold = 0.15,        -- Mindestbewegung in Metern, damit als 'aktiv' gilt
+    VelocityThreshold = 0.1,     -- Mindestgeschwindigkeit, damit als 'aktiv' gilt
+    CamRayCastDist = 5.0,        -- Reichweite des Kamera-Raycasts (z.B. wenn man umschaut)
+
+    -- Bypass Einstellungen
+    Bypass = {
+        UseAcePermission = true,       -- z.B. add_ace group.admin mc_core.afkbypass allow
+        AcePermission = "mc_core.afkbypass",
+        Identifiers = {                -- Alternativ/zusätzlich: feste Liste an Identifiern (license, steam, discord, etc.)
+            -- "license:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        },
+        Jobs = {                       -- Jobs, die nie gekickt werden (z.B. Support/Staff-Job)
+            -- "admin",
+        }
+    }
+}
+
+---------------------------------------------------------------
+-- MODUL: Discord Logging (AFK-Kicks + txAdmin-Kicks)
+---------------------------------------------------------------
+Config.DiscordLogging = {
+    Enabled = true,
+    LogAFKKicks = true,       -- eigene AFK-Kicks in Discord loggen
+    LogTxAdminKicks = true,   -- Kicks über txAdmin (z.B. per Admin-Menü) in Discord loggen
+}
+
 
 ---------------------------------------------------------------
 -- MODUL: Crafter
@@ -521,6 +567,12 @@ Config.Labors = {
 ---------------------------------------------------------------
 -- MODUL: Maut  (eigenständige globale Tabelle, wie im Original)
 ---------------------------------------------------------------
+-- Server kann darüber jede Notify anzeigen lassen, läuft durch MC_Notify (Auto-Detect)
+RegisterNetEvent("mc_core:notifyClient")
+AddEventHandler("mc_core:notifyClient", function(title, msg, ntype, duration)
+    MC_Notify(title, msg, ntype, duration)
+end)
+
 MautConfig = {
     Price = 500,
     SpeedFactor = 6.0,
@@ -533,19 +585,20 @@ MautConfig = {
         ambulance = true,
     },
 
-    Cooldown = 1,
+    Cooldown = 1, -- 2 Minuten – verhindert, dass an derselben Mautstelle sofort erneut abgebucht wird
 
     Tolls = {
-        { coords = vector3(-3003.53, 1466.46, 27.54), radius = 10.0, name = "route 1 Maut" },
-        { coords = vector3(-2643.72, 1567.77, 121.34), radius = 10.0, name = "streaße 9050 Maut" },
-        { coords = vector3(-1477.94, 1552.65, 112.27), radius = 10.0, name = "route 11 Maut" },
-        { coords = vector3(-807.43, 1394.21, 247.22), radius = 10.0, name = "MTL Vinewods Dr. Maut" },
-        { coords = vector3(165.33, 1470.88, 239.63), radius = 10.0, name = "Baytree Canyon RO Maut" },
-        { coords = vector3(1233.75, 1274.15, 143.57), radius = 10.0, name = "Mount Haan Road Maut" },
-        { coords = vector3(1292.86, 1262.92, 108.63), radius = 10.0, name = "La Fuente Blanca Maut" },
-        { coords = vector3(1707.31, 1460.09, 85.42), radius = 25.0, name = "Los Santos FWY 1 Maut" },
-        { coords = vector3(2043.48, 1498.11, 75.6), radius = 10.0, name = "route 15 Maut" },
-        { coords = vector3(2538.91, 1789.64, 23.95), radius = 10.0, name = "Senora Way Maut" }
+        { coords = vector3(-2698.93, 2358.39, 16.83), radius = 20.0, name = "Great Ocean Highway Maut" },   
+        { coords = vector3(-1328.21, 2459.62, 25.75), radius = 10.0, name = "route 68 3 Maut" },  
+        { coords = vector3(-473.39, 2821.08, 36.83), radius = 10.0, name = "route 68 2 Maut" },
+        { coords = vector3(-435.04, 2819.35, 38.75), radius = 10.0, name = "route 68 1 Maut" },
+        { coords = vector3(225.5, 2487.45, 54.98), radius = 10.0, name = "Senora Road Sand weg Maut" },
+        { coords = vector3(340.13, 2538.65, 44.42), radius = 10.0, name = "Senora Road Maut" },
+        { coords = vector3(1962.2, 2624.93, 45.98), radius = 10.0, name = "Senora Freeway SG Maut" },
+        { coords = vector3(2012.8, 2580.3, 54.6), radius = 10.0, name = "Senora Freeway Maut" },
+        { coords = vector3(2056.4, 2537.33, 57.31), radius = 10.0, name = "Senora Freeway zug  Maut" },
+        { coords = vector3(2157.87, 2447.29, 89.08), radius = 10.0, name = "Senora Way sand weg Maut" },
+        { coords = vector3(2542.02, 2104.3, 19.62), radius = 10.0, name = "Senora Way Maut" }
     },
 
     Webhook = "https://ptb.discord.com/api/webhooks/1528903129339400376/-C6BQVA6OEXc3DYFLKJ333kPW0zDq0o5Jc4s0CbU31hFa25aP9Q9zLjfD5BR01ZJoDVF"
@@ -649,7 +702,7 @@ Config.Moneywash = {
             label  = "Waschsalon - Innenstadt",
             coords = vector3(1135.01, -789.12, 57.6),
             radius = 2.0,
-            blip   = { enabled = true, sprite = 617, color = 5, scale = 0.8 },
+           -- blip   = { enabled = true, sprite = 617, color = 5, scale = 0.8 },
             marker = { r = 9, g = 164, b = 241, alpha = 140 },
         }
     },
@@ -733,7 +786,9 @@ config_namecheck = {
     
         },
         identifiers = {
-            "d349c528cff8aacc207987d36fe491c1b9a7bbb3"
+            "d349c528cff8aacc207987d36fe491c1b9a7bbb3",
+            "29be6b803481db0126ed1e26a8eeee5fc6aaa748"
+
         },
         team_groups = {
             "Owner", 

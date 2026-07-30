@@ -142,105 +142,144 @@ ESX.RegisterServerCallback("vehicleTrack:getTowedVehicles", function(source, cb)
     )
 end)
 
----------------------------------------------------------------
--- MODUL: AntiAFK
----------------------------------------------------------------
-local AFK_TIME = 30 * 60
-local WARNING_TIME = 25 * 60
+-- ============================================================
+-- SECTION: antiafk_server.lua (SERVER)
+-- ============================================================
+do
+    local playerActivity = {}
+    local playerNameCache = {} -- src -> Name, damit wir ihn nach dem Kick noch kennen
 
-local playerActivity = {}
+    ---------------------------------------------------------------
+    -- Discord Webhook Helper
+    ---------------------------------------------------------------
+    local function SendDiscordEmbed(title, description, color)
+        if not Config.DiscordLogging.Enabled then return end
+        if not Config.AFKWebhook or Config.AFKWebhook == "" then return end
 
-local JobWhitelist = {
-    ["police"] = true,
-    ["ambulance"] = true,
-    ["mechanic"] = true,
-    ["admin"] = true
-}
+        local payload = {
+            username = "MC-Core Logs",
+            embeds = {
+                {
+                    title = title,
+                    description = description,
+                    color = color or 15158332,
+                    footer = { text = os.date("%d.%m.%Y %H:%M:%S") }
+                }
+            }
+        }
 
-AddEventHandler('playerJoining', function()
-    playerActivity[source] = os.time()
-end)
-
-AddEventHandler('playerDropped', function()
-    playerActivity[source] = nil
-end)
-
-RegisterNetEvent('mc_core:updateActivity')
-AddEventHandler('mc_core:updateActivity', function()
-    playerActivity[source] = os.time()
-end)
-
--- Discord Logging
-local function sendAfkDiscordLog(title, message, color)
-    if not Config.AFKWebhook then return end
-
-    local data = {
-        embeds = {{
-            title = title,
-            description = message,
-            color = color
-        }}
-    }
-
-    PerformHttpRequest(Config.AFKWebhook, function() end, "POST", json.encode(data), { ["Content-Type"] = "application/json" })
-end
-
--- SQL Logging
-local function logAFK(identifier, name, event)
-    MySQL.insert.await(
-        "INSERT INTO mc_afk_logs (identifier, name, event) VALUES (?, ?, ?)",
-        {identifier, name, event}
-    )
-end
-
-CreateThread(function()
-    while true do
-        Wait(60000)
-        local now = os.time()
-
-        for src, lastActive in pairs(playerActivity) do
-            local xPlayer = ESX.GetPlayerFromId(src)
-            if not xPlayer then goto continue end
-
-            local job = xPlayer.job.name
-            local identifier = xPlayer.identifier
-            local name = xPlayer.getName()
-
-            -- Whitelist Jobs ignorieren
-            if JobWhitelist[job] then
-                goto continue
-            end
-
-            local diff = now - lastActive
-
-            -- Warnung
-            if diff >= WARNING_TIME and diff < AFK_TIME then
-                TriggerClientEvent('mc_core:afkWarning', src)
-
-                logAFK(identifier, name, "warning")
-                sendAfkDiscordLog(
-                    "AFK Warnung",
-                    ("**%s** (%s) ist seit 25 Minuten AFK."):format(name, identifier),
-                    16776960 -- Gelb
-                )
-            end
-
-            -- Kick
-            if diff >= AFK_TIME then
-                logAFK(identifier, name, "kick")
-                sendAfkDiscordLog(
-                    "AFK Kick",
-                    ("**%s** (%s) wurde wegen 30 Minuten AFK gekickt."):format(name, identifier),
-                    16711680 -- Rot
-                )
-
-                DropPlayer(src, "Du warst 30 min AFK")
-            end
-
-            ::continue::
-        end
+        PerformHttpRequest(Config.AFKWebhook, function(_, _, _) end, 'POST',
+            json.encode(payload),
+            { ['Content-Type'] = 'application/json' }
+        )
     end
-end)
+
+    ---------------------------------------------------------------
+    -- Bypass Check
+    ---------------------------------------------------------------
+    local function hasBypass(src)
+        local cfg = Config.AntiAFK.Bypass
+
+        if cfg.UseAcePermission and IsPlayerAceAllowed(src, cfg.AcePermission) then
+            return true
+        end
+
+        for _, job in ipairs(cfg.Jobs) do
+            -- Beispiel für Frameworks mit ESX/QBCore, anpassen falls nötig:
+            -- local xPlayer = ESX.GetPlayerFromId(src)
+            -- if xPlayer and xPlayer.job.name == job then return true end
+        end
+
+        local ids = GetPlayerIdentifiers(src)
+        for _, id in ipairs(ids) do
+            for _, allowedId in ipairs(cfg.Identifiers) do
+                if id == allowedId then
+                    return true
+                end
+            end
+        end
+
+        return false
+    end
+
+    ---------------------------------------------------------------
+    -- AFK Events
+    ---------------------------------------------------------------
+    RegisterServerEvent('mc_core:updateActivity')
+    AddEventHandler('mc_core:updateActivity', function()
+        local src = source
+        playerActivity[src] = os.time()
+    end)
+
+    RegisterServerEvent('mc_core:afkKickCheck')
+    AddEventHandler('mc_core:afkKickCheck', function()
+        local src = source
+        local cfg = Config.AntiAFK
+
+        if not cfg.Enabled then return end
+        if hasBypass(src) then return end
+
+        local last = playerActivity[src] or os.time()
+        local elapsedMin = (os.time() - last) / 60
+
+        if elapsedMin >= cfg.KickAfterMinutes then
+            if Config.DiscordLogging.LogAFKKicks then
+                local name = playerNameCache[src] or GetPlayerName(src) or ("ID " .. src)
+                SendDiscordEmbed(
+                    "🚫 AFK-Kick",
+                    string.format("**Spieler:** %s (ID: %d)\n**Grund:** %s", name, src, cfg.KickMessage),
+                    15158332 -- rot
+                )
+            end
+
+            DropPlayer(src, cfg.KickMessage)
+        end
+    end)
+
+    AddEventHandler('playerJoining', function()
+        local src = source
+        playerActivity[src] = os.time()
+        playerNameCache[src] = GetPlayerName(src)
+    end)
+
+    AddEventHandler('playerDropped', function()
+        local src = source
+        playerActivity[src] = nil
+        playerNameCache[src] = nil
+    end)
+
+    ---------------------------------------------------------------
+    -- txAdmin Event: playerKicked
+    -- Wird gefeuert, wenn ein Spieler über txAdmin (Panel/Ingame-Menü) gekickt wird.
+    -- Event-Daten laut txAdmin-Doku: target, author, reason, dropMessage
+    -- Hinweis: target kann -1 sein, wenn "alle kicken" ausgeführt wurde.
+    ---------------------------------------------------------------
+    AddEventHandler('txAdmin:events:playerKicked', function(eventData)
+        if not Config.DiscordLogging.LogTxAdminKicks then return end
+
+        local target = eventData and eventData.target
+        local author = (eventData and eventData.author) or "txAdmin"
+        local reason = (eventData and eventData.reason) or "Kein Grund angegeben"
+
+        local targetName = "Alle Spieler"
+        if target and target ~= -1 then
+            targetName = playerNameCache[target] or GetPlayerName(target) or ("ID " .. tostring(target))
+        end
+
+        SendDiscordEmbed(
+            "👢 Spieler gekickt (txAdmin)",
+            string.format(
+                "**Spieler:** %s%s\n**Von:** %s\n**Grund:** %s",
+                targetName,
+                (target and target ~= -1) and (" (ID: " .. tostring(target) .. ")") or "",
+                author,
+                reason
+            ),
+            3447003 -- blau
+        )
+    end)
+end
+
 
 ---------------------------------------------------------------
 -- MODUL: Crafter
@@ -1240,7 +1279,8 @@ end)
 ---------------------------------------------------------------
 -- MODUL: Maut
 ---------------------------------------------------------------
-local MautCooldowns = {}
+local MautCooldowns = {}   -- [identifier][tollName] = timestamp, wann wieder bezahlt werden darf (nach Verlassen)
+local MautActive = {}      -- [identifier][tollName] = true, solange der Spieler NOCH in der Zone steht (harte Sperre)
 
 RegisterNetEvent("mc_core:maut:pay")
 AddEventHandler("mc_core:maut:pay", function(tollName, price, speed)
@@ -1250,16 +1290,26 @@ AddEventHandler("mc_core:maut:pay", function(tollName, price, speed)
     local identifier = xPlayer.identifier
     local now = os.time()
 
+    MautActive[identifier] = MautActive[identifier] or {}
     MautCooldowns[identifier] = MautCooldowns[identifier] or {}
 
+    -- HARTE SPERRE: Solange der Spieler laut Client noch in der Zone steht,
+    -- wird niemals ein zweites Mal abgerechnet – unabhängig vom Cooldown-Wert.
+    if MautActive[identifier][tollName] then
+        return
+    end
+
+    -- Normaler Cooldown: verhindert zu schnelles erneutes Bezahlen NACH dem Verlassen der Zone
     if MautCooldowns[identifier][tollName] and MautCooldowns[identifier][tollName] > now then
         return
     end
 
+    -- Sperre setzen: Spieler gilt jetzt als "in der Maut", bis Client den Austritt meldet
+    MautActive[identifier][tollName] = true
     MautCooldowns[identifier][tollName] = now + MautConfig.Cooldown
 
     if MautConfig.FreeJobs[xPlayer.job.name] then
-        TriggerClientEvent("hex_hud:notify", source, "Mautstelle", "Du darfst kostenlos passieren.")
+        TriggerClientEvent("mc_core:notifyClient", source, "Mautstelle", "Du darfst kostenlos passieren.", "info")
         SendMautLog(xPlayer, tollName, price, speed, "FREEJOB")
         return
     end
@@ -1281,11 +1331,24 @@ AddEventHandler("mc_core:maut:pay", function(tollName, price, speed)
     end
 
     if paid then
-        TriggerClientEvent("hex_hud:notify", source, "Mautstelle", price .. "$ wurden abgebucht.")
+        TriggerClientEvent("mc_core:notifyClient", source, "Mautstelle",
+            ("Speed: %.1f km/h | %s$ wurden abgebucht."):format(speed, price), "success")
         SendMautLog(xPlayer, tollName, price, speed, "PAID_SPEED")
     else
-        TriggerClientEvent("hex_hud:notify", source, "Mautstelle", "Nicht genügend Geld für die Maut.")
+        TriggerClientEvent("mc_core:notifyClient", source, "Mautstelle", "Nicht genügend Geld für die Maut.", "error")
         SendMautLog(xPlayer, tollName, price, speed, "FAILED")
+    end
+end)
+
+-- Client meldet, dass die Zone verlassen wurde -> Sperre aufheben
+RegisterNetEvent("mc_core:maut:exit")
+AddEventHandler("mc_core:maut:exit", function(tollName)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return end
+
+    local identifier = xPlayer.identifier
+    if MautActive[identifier] then
+        MautActive[identifier][tollName] = nil
     end
 end)
 
@@ -1297,8 +1360,8 @@ AddEventHandler("mc_core:maut:policeAlert", function(tollName, price, speed)
     for _, id in ipairs(ESX.GetPlayers()) do
         local p = ESX.GetPlayerFromId(id)
         if p and p.job and p.job.name == "police" then
-            TriggerClientEvent("hex_hud:notify", id, "Maut-Alarm",
-                ("Raser erkannt: %.1f km/h an %s"):format(speed, tollName)
+            TriggerClientEvent("mc_core:notifyClient", id, "Maut-Alarm",
+                ("Raser erkannt: %.1f km/h an %s"):format(speed, tollName), "warning"
             )
         end
     end
@@ -1306,9 +1369,6 @@ AddEventHandler("mc_core:maut:policeAlert", function(tollName, price, speed)
     SendMautLog(xPlayer, tollName, price, speed, "POLICE_ALERT")
 end)
 
--- Hinweis: im Original hieß diese Funktion "SendLog" (global). Umbenannt
--- auf "SendMautLog", zur Übersichtlichkeit/Robustheit in dieser
--- gemeinsamen Datei.
 function SendMautLog(xPlayer, tollName, price, speed, status)
     if not MautConfig.Webhook or MautConfig.Webhook == "" then return end
 
