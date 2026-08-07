@@ -13,6 +13,13 @@
     --danger: #ff6b6b;
     --font-head: "Rajdhani", "Segoe UI", sans-serif;
     --font-body: "Inter", "Segoe UI", sans-serif;
+
+    /* Lifeinvader - eigene Variablen, unabhängig vom Rest des UIs
+       überschreibbar, um Lifeinvader farblich komplett anzupassen */
+    --li-accent: #e74c3c;
+    --li-accent-dim: rgba(231, 76, 60, .16);
+    --li-broadcast-bg: #16161c;
+    --li-broadcast-border: rgba(231, 76, 60, .4);
 }
 
 * {
@@ -65,6 +72,13 @@ body {
 
 /* Verkauf ebenfalls zentriert wie Crafter/Labor */
 #verkaufApp {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Lifeinvader ebenfalls zentriert wie Crafter/Labor */
+#lifeinvaderApp {
     display: flex;
     justify-content: center;
     align-items: center;
@@ -905,4 +919,241 @@ body {
 
 .ws-btn-red {
     background: #ff2e2e;
+}
+
+/* ===========================
+   LIFEINVADER
+=========================== */
+
+.li-panel {
+    width: 480px;
+    max-width: 92vw;
+    padding: 28px;
+    display: flex;
+    flex-direction: column;
+}
+
+.li-dot {
+    background: var(--li-accent);
+    box-shadow: 0 0 8px 2px var(--li-accent-dim);
+}
+
+.li-logo {
+    height: 28px;
+    max-width: 120px;
+    object-fit: contain;
+}
+
+.li-textarea {
+    width: 100%;
+    min-height: 110px;
+    resize: none;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    padding: 12px;
+    margin-top: 4px;
+}
+
+.li-input-row {
+    margin-bottom: 10px;
+}
+
+.li-text-input {
+    width: 100%;
+    height: 40px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    padding: 0 12px;
+}
+
+.li-text-input::placeholder {
+    color: var(--muted-2);
+}
+
+.li-text-input:focus {
+    outline: none;
+    border-color: var(--li-accent);
+}
+
+.li-textarea::placeholder {
+    color: var(--muted-2);
+}
+
+.li-textarea:focus {
+    outline: none;
+    border-color: var(--li-accent);
+}
+
+.li-meta-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 10px 0 16px;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.li-char-count {
+    color: var(--muted);
+}
+
+.li-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 14px;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+}
+
+.li-name-row input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--li-accent);
+    cursor: pointer;
+}
+
+/* Lifeinvader-Buttons nutzen die Akzentfarbe des Moduls statt der globalen */
+#liSubmitBtn {
+    background: var(--li-accent);
+}
+
+#liSubmitBtn:hover:not(:disabled) {
+    filter: brightness(1.1);
+}
+
+/* ===========================
+   LIFEINVADER BROADCAST (Einblendung für alle Spieler)
+=========================== */
+
+.li-broadcast {
+    position: fixed;
+    top: 6%;
+    left: 50%;
+    transform: translate(-50%, -20px);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .35s ease, transform .35s ease;
+    z-index: 999;
+}
+
+.li-broadcast-show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.li-broadcast-inner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--li-broadcast-bg);
+    border: 1px solid var(--li-broadcast-border);
+    border-radius: 10px;
+    padding: 12px 20px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .6);
+    max-width: 520px;
+}
+
+.li-broadcast-brand {
+    font-family: var(--font-head);
+    font-weight: 700;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+    color: var(--li-accent);
+    flex-shrink: 0;
+}
+
+.li-broadcast-text {
+    font-size: 14px;
+    color: var(--text);
+    word-break: break-word;
+}
+
+/* ===========================
+   FORMULAR PANEL (eigenständig)
+=========================== */
+
+#formularApp {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.formular-panel {
+    pointer-events: auto;
+    width: min(420px, 90vw);
+    max-height: 88vh;
+    padding: 24px 26px;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}
+
+.formular-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 4px 0 18px;
+}
+
+.formular-field label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+    letter-spacing: .2px;
+}
+
+.formular-input,
+.formular-select,
+.formular-textarea {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 14px;
+    padding: 10px 12px;
+}
+
+.formular-textarea {
+    min-height: 100px;
+    resize: none;
+}
+
+.formular-input::placeholder,
+.formular-textarea::placeholder {
+    color: var(--muted-2);
+}
+
+.formular-input:focus,
+.formular-select:focus,
+.formular-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.formular-readonly {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.formular-charcount {
+    display: block;
+    text-align: right;
+    font-size: 11px;
+    color: var(--muted-2);
+    margin-top: 4px;
 }

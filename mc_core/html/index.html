@@ -397,6 +397,187 @@
     </div>
 </div>
 
+<!-- ================================================= -->
+<!-- LIFEINVADER UI (eigenständig)                      -->
+<!-- ================================================= -->
+<div id="lifeinvaderApp" class="app hidden">
+    <main class="panel li-panel">
+
+        <span class="corner corner-tl"></span>
+        <span class="corner corner-tr"></span>
+        <span class="corner corner-bl"></span>
+        <span class="corner corner-br"></span>
+
+        <header class="panel-header">
+            <div class="brand">
+                <img id="liLogo" class="li-logo hidden" alt="">
+                <span class="brand-dot li-dot"></span>
+                <span id="liServerName">Lifeinvader</span>
+            </div>
+            <button id="liCloseBtn" class="close-btn" title="Schließen (ESC)">✕</button>
+        </header>
+
+        <h2 class="section-title">
+            <span class="eyebrow">01</span> Werbung aufgeben
+        </h2>
+
+        <div id="liNameFieldRow" class="li-input-row hidden">
+            <input type="text" id="liNameInput" class="li-text-input" placeholder="Name">
+        </div>
+
+        <div id="liPhoneFieldRow" class="li-input-row hidden">
+            <input type="text" id="liPhoneInput" class="li-text-input" placeholder="Telefonnummer">
+        </div>
+
+        <textarea id="liText" class="li-textarea" placeholder="Deine Werbung..."></textarea>
+
+        <div class="li-meta-row">
+            <span id="liCharCount" class="li-char-count">0 / 140</span>
+            <span id="liPrice" class="cash">$0</span>
+        </div>
+
+        <label id="liNameRow" class="li-name-row hidden">
+            <input type="checkbox" id="liNameCheckbox">
+            <span>Mit meinem Namen versehen</span>
+        </label>
+
+        <button id="liSubmitBtn" class="craft-button">Veröffentlichen</button>
+
+        <div id="liFeedback" class="empty-state small"></div>
+
+        <footer class="footer">
+            Drücke <span class="key">ESC</span> zum Schließen
+        </footer>
+
+    </main>
+</div>
+
+<!-- Lifeinvader Broadcast: kurze Einblendung für ALLE Spieler, sobald eine Werbung veröffentlicht wurde -->
+<div id="liBroadcastApp" class="li-broadcast hidden">
+    <div class="li-broadcast-inner">
+        <span id="liBroadcastBrand" class="li-broadcast-brand">Lifeinvader</span>
+        <span id="liBroadcastText" class="li-broadcast-text"></span>
+    </div>
+</div>
+
+<!-- ================================================= -->
+<!-- FORMULAR UI (eigenständig, Felder kommen dynamisch -->
+<!-- aus der Config und werden per JS gerendert)        -->
+<!-- ================================================= -->
+<div id="formularApp" class="app hidden">
+    <main class="panel formular-panel">
+
+        <span class="corner corner-tl"></span>
+        <span class="corner corner-tr"></span>
+        <span class="corner corner-bl"></span>
+        <span class="corner corner-br"></span>
+
+        <header class="panel-header">
+            <div class="brand">
+                <span class="brand-dot"></span>
+                Formular
+            </div>
+            <button id="formularCloseBtn" class="close-btn" title="Schließen (ESC)">✕</button>
+        </header>
+
+        <div id="formularFields" class="formular-fields"></div>
+
+        <button id="formularSubmitBtn" class="craft-button">Absenden</button>
+
+        <div id="formularFeedback" class="empty-state small"></div>
+
+        <footer class="footer">
+            Drücke <span class="key">ESC</span> zum Schließen
+        </footer>
+
+    </main>
+</div>
+
+<!-- ================================================= -->
+<!-- KAMPFUNFÄHIGKEIT HUD (eigenständig, isoliert)      -->
+<!-- ================================================= -->
+<div id="kampfunfaehigApp" class="kf-hud hidden">
+    <svg class="kf-ring" viewBox="0 0 120 120">
+        <circle class="kf-ring-bg" cx="60" cy="60" r="52"></circle>
+        <circle class="kf-ring-fg" id="kfRingFg" cx="60" cy="60" r="52"></circle>
+    </svg>
+    <div class="kf-center">
+        <div class="kf-time" id="kfTimer">00:00</div>
+        <div class="kf-time-unit" id="kfTimeUnit">min</div>
+    </div>
+    <div class="kf-label" id="kfLine3">KAMPFUNFÄHIG</div>
+</div>
+
+<style>
+    #kampfunfaehigApp.kf-hud {
+        position: fixed;
+        bottom: 90px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 130px;
+        text-align: center;
+        font-family: 'Rajdhani', 'Inter', sans-serif;
+        color: #ffffff;
+        z-index: 9999;
+    }
+    #kampfunfaehigApp.kf-hud.hidden { display: none; }
+
+    #kampfunfaehigApp .kf-ring {
+        width: 90px;
+        height: 90px;
+        display: block;
+        margin: 0 auto;
+        transform: rotate(-90deg);
+        filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+    }
+    #kampfunfaehigApp .kf-ring-bg {
+        fill: none;
+        stroke: rgba(255, 255, 255, 0.18);
+        stroke-width: 8;
+    }
+    #kampfunfaehigApp .kf-ring-fg {
+        fill: none;
+        stroke: #2fb2ff;
+        stroke-width: 8;
+        stroke-linecap: round;
+        stroke-dasharray: 326.7256;
+        stroke-dashoffset: 0;
+        transition: stroke-dashoffset 0.6s linear;
+    }
+
+    #kampfunfaehigApp .kf-center {
+        position: relative;
+        margin-top: -66px;
+        margin-bottom: 6px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+    }
+    #kampfunfaehigApp .kf-time {
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1;
+        text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+    }
+    #kampfunfaehigApp .kf-time-unit {
+        font-size: 10px;
+        font-weight: 500;
+        color: #cfd6dc;
+        margin-top: 1px;
+    }
+
+    #kampfunfaehigApp .kf-label {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+        color: #2fb2ff;
+        text-transform: uppercase;
+        text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+    }
+</style>
+
 <script src="app.js"></script>
 
 </body>

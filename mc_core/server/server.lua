@@ -2,7 +2,7 @@
     ============================================================
     ZUSAMMENGEFÜHRTES SERVER-SCRIPT (mc_core)
     ============================================================
-    Fasst zusammen: Abschleppsystem, antiafk, crafter, elevator, event,
+    Fasst zusammen: antiafk, crafter, elevator, event,
     farming, Fraktionssperre, givecar, klingel, labor, maut,
     mechanic_server, moneywash, namecheck, npc_blocker, purge,
     sperrezone, verkauf.
@@ -54,96 +54,8 @@
 ---------------------------------------------------------------
 ESX = ESX or exports["es_extended"]:getSharedObject()
 
----------------------------------------------------------------
--- MODUL: Abschleppsystem
----------------------------------------------------------------
-
--- Fahrzeugbewegung speichern
-RegisterNetEvent("vehicleTrack:updateMovement")
-AddEventHandler("vehicleTrack:updateMovement", function(plate)
-    local src = source
-    local xPlayer = ESX.GetPlayerFromId(src)
-    if not xPlayer then return end
-
-    MySQL.Async.execute(
-        "REPLACE INTO vehicle_tracking (plate, owner, last_move, status) VALUES (@plate, @owner, @last_move, 'active')",
-        {
-            ["@plate"] = plate,
-            ["@owner"] = xPlayer.identifier,
-            ["@last_move"] = os.time()
-        }
-    )
-end)
-
--- Automatisches Abschleppen
-CreateThread(function()
-    while true do
-        Wait(600000) -- alle 10 Minuten prüfen
-
-        MySQL.Async.fetchAll("SELECT * FROM vehicle_tracking WHERE status = 'active'", {}, function(result)
-            for _, v in ipairs(result) do
-                local now = os.time()
-                local days = (now - v.last_move) / 86400
-
-                if days >= 3 then
-                    print("Automatisches Abschleppen: " .. v.plate)
-
-                    MySQL.Async.execute(
-                        "UPDATE vehicle_tracking SET status = 'towed', tow_time = @tow WHERE plate = @plate",
-                        {
-                            ["@tow"] = now,
-                            ["@plate"] = v.plate
-                        }
-                    )
-
-                    TriggerEvent("vehicleTrack:autoTow", v.plate, v.owner)
-                end
-            end
-        end)
-    end
-end)
-
--- Abschlepp-Event
-local towDepot = vector3(409.12, -1623.55, 29.29)
-
-RegisterNetEvent("vehicleTrack:autoTow")
-AddEventHandler("vehicleTrack:autoTow", function(plate, owner)
-    -- Fahrzeug aus der Welt entfernen
-    for _, veh in ipairs(GetAllVehicles()) do
-        if GetVehicleNumberPlateText(veh) == plate then
-            DeleteEntity(veh)
-        end
-    end
-
-    -- Spieler benachrichtigen
-    local xPlayers = ESX.GetPlayers()
-    for _, id in ipairs(xPlayers) do
-        local xP = ESX.GetPlayerFromId(id)
-        if xP and xP.identifier == owner then
-            TriggerClientEvent("chat:addMessage", id, {
-                args = { "^1Dein Fahrzeug (" .. plate .. ") wurde abgeschleppt, da es 3 Tage nicht bewegt wurde." }
-            })
-        end
-    end
-
-    print("Fahrzeug " .. plate .. " wurde automatisch abgeschleppt.")
-end)
-
--- Abgeschleppte Fahrzeuge abrufen
-ESX.RegisterServerCallback("vehicleTrack:getTowedVehicles", function(source, cb)
-    local xPlayer = ESX.GetPlayerFromId(source)
-
-    MySQL.Async.fetchAll(
-        "SELECT * FROM vehicle_tracking WHERE owner = @owner AND status = 'towed'",
-        {["@owner"] = xPlayer.identifier},
-        function(result)
-            cb(result)
-        end
-    )
-end)
-
 -- ============================================================
--- SECTION: antiafk_server.lua (SERVER)
+-- SECTION: antiafk (SERVER)
 -- ============================================================
 do
     local playerActivity = {}
@@ -247,6 +159,14 @@ do
         playerActivity[src] = nil
         playerNameCache[src] = nil
     end)
+
+    -- Debug: /afkbypass zeigt dir, ob dein Account einen Bypass hat (z.B. Ace-Permission)
+    RegisterCommand('afkbypass', function(src)
+        local bypass = hasBypass(src)
+        TriggerClientEvent('chat:addMessage', src, {
+            args = { "[AntiAFK]", bypass and "Du hast einen Bypass und wirst NIE gekickt." or "Du hast keinen Bypass." }
+        })
+    end, false)
 
     ---------------------------------------------------------------
     -- txAdmin Event: playerKicked
@@ -883,10 +803,56 @@ exports('FraksperreRemoveBlock', function(identifier)
 end)
 
 -- ============================================================
---  JOB-SETZEN ABFANGEN
---  Erwartete Nutzung durch Job-Menüs/Resourcen:
---  TriggerServerEvent(FraksperreConfig.Events.setjob, jobName, grade)
+--  JOB-SETZEN ABFANGEN (ROBUST)
+--  Problem vorher: Es wurde NUR abgefangen, wenn ein Script
+--  TriggerServerEvent(FraksperreConfig.Events.setjob, job, grade)
+--  aufruft. In der Praxis setzen Boss-Menüs/Society-Scripts/etc.
+--  den Job aber direkt über xPlayer.setJob(...), ohne über dieses
+--  Event zu gehen -> die Sperre griff nie, Jobwechsel war trotz
+--  aktiver Fraksperre möglich.
+--
+--  Fix: xPlayer.setJob wird pro Spieler einmal "umgebogen" (gewrappt).
+--  Dadurch greift die Prüfung IMMER, egal welches Script/Event am
+--  Ende xPlayer.setJob() aufruft.
 -- ============================================================
+local function WrapSetJob(xPlayer)
+    if not xPlayer or xPlayer.__frakSperreWrapped then return end
+    if type(xPlayer.setJob) ~= 'function' then return end
+
+    local originalSetJob = xPlayer.setJob
+
+    xPlayer.setJob = function(jobName, grade, ...)
+        local identifier = GetIdentifier(xPlayer)
+        local blocked = IsBlocked(identifier)
+
+        if blocked and not IsWhitelistedJob(jobName) then
+            FrakNotify(xPlayer.source, FraksperreConfig.Language.blockedjob)
+            frakDbg(("%s hat versucht (setJob) während aktiver Fraksperre den Job '%s' anzunehmen (blockiert)"):format(xPlayer.getName(), jobName))
+            return
+        end
+
+        return originalSetJob(jobName, grade, ...)
+    end
+
+    xPlayer.__frakSperreWrapped = true
+end
+
+-- Beim Neustart von mc_core (z.B. "restart mc_core") sind bereits
+-- eingeloggte Spieler-Objekte schon vorhanden -> auch die sofort wrappen,
+-- sonst wäre die Sperre erst nach erneutem Login wieder aktiv.
+CreateThread(function()
+    Wait(1000)
+    local players = ESX.GetPlayers and ESX.GetPlayers() or {}
+    for _, playerId in ipairs(players) do
+        local xTarget = ESX.GetPlayerFromId(playerId)
+        if xTarget then WrapSetJob(xTarget) end
+    end
+end)
+
+-- Bleibt als Kompatibilitäts-Event erhalten, falls irgendein Script
+-- explizit TriggerServerEvent(FraksperreConfig.Events.setjob, ...) nutzt.
+-- Ruft am Ende ebenfalls nur xPlayer.setJob auf, ist also durch den
+-- Wrapper oben zusätzlich abgesichert.
 RegisterServerEvent(FraksperreConfig.Events.setjob)
 AddEventHandler(FraksperreConfig.Events.setjob, function(jobName, grade)
     local src = source
@@ -906,13 +872,16 @@ AddEventHandler(FraksperreConfig.Events.setjob, function(jobName, grade)
 end)
 
 -- ============================================================
---  PLAYER LOADED -> Sperrstatus prüfen und ggf. informieren
+--  PLAYER LOADED -> Sperrstatus prüfen, informieren UND setJob wrappen
 --  ESX feuert dieses Event als: TriggerEvent('esx:playerLoaded', playerId, xPlayer, ...)
 --  Der erste Parameter ist also die Spieler-ID (number), NICHT das xPlayer-Objekt!
 -- ============================================================
 AddEventHandler(FraksperreConfig.Events.playerLoaded, function(playerId, xPlayer)
     if not xPlayer then return end
     local src = xPlayer.source or playerId
+
+    WrapSetJob(xPlayer)
+
     local identifier = GetIdentifier(xPlayer)
 
     local blocked, untilTs = IsBlocked(identifier)
@@ -1111,13 +1080,19 @@ local function GenerateRandomString(length)
     return result
 end
 
-RegisterCommand("givecar", function(source, args)
-    local xPlayer = ESX.GetPlayerFromId(source)
+RegisterCommand(ConfigGiveCar.Commands.giveCar, function(source, args)
+    -- source 0 = Server-/txAdmin-Konsole -> gilt immer als berechtigt, es gibt kein ESX-Player-Objekt dafür
+    local isConsole = source == 0
+    local xPlayer
 
-    -- Admin Check
-    if not ConfigGiveCar.AdminGroups[xPlayer.getGroup()] then
-        xPlayer.showNotification(ConfigGiveCar.Messages.noPerms)
-        return
+    if not isConsole then
+        xPlayer = ESX.GetPlayerFromId(source)
+
+        -- Admin Check
+        if not ConfigGiveCar.AdminGroups[xPlayer.getGroup()] then
+            xPlayer.showNotification(ConfigGiveCar.Messages.noPerms)
+            return
+        end
     end
 
     -- Args
@@ -1126,13 +1101,21 @@ RegisterCommand("givecar", function(source, args)
     local plate = args[3]
 
     if not targetId or not vehicleModel then
-        xPlayer.showNotification(ConfigGiveCar.Messages.usage)
+        if isConsole then
+            print("[GiveCar] " .. ConfigGiveCar.Messages.usage)
+        else
+            xPlayer.showNotification(ConfigGiveCar.Messages.usage)
+        end
         return
     end
 
     local target = ESX.GetPlayerFromId(targetId)
     if not target then
-        xPlayer.showNotification(ConfigGiveCar.Messages.playerNotFound)
+        if isConsole then
+            print("[GiveCar] " .. ConfigGiveCar.Messages.playerNotFound)
+        else
+            xPlayer.showNotification(ConfigGiveCar.Messages.playerNotFound)
+        end
         return
     end
 
@@ -1158,12 +1141,12 @@ RegisterCommand("givecar", function(source, args)
     -- Logging
     if ConfigGiveCar.Logging.enabled and ConfigGiveCar.Logging.webhook ~= "" then
         PerformHttpRequest(ConfigGiveCar.Logging.webhook, function() end, "POST", json.encode({
-            username = "GiveCar Log",
+            username = ConfigGiveCar.Logging.username,
             embeds = {{
-                title = "Fahrzeug vergeben",
-                color = 3066993,
+                title = ConfigGiveCar.Logging.titleGiveCar,
+                color = ConfigGiveCar.Logging.color,
                 fields = {
-                    { name = "Admin", value = xPlayer.getName() .. " (" .. xPlayer.identifier .. ")" },
+                    { name = "Admin", value = isConsole and "Server-Konsole" or (xPlayer.getName() .. " (" .. xPlayer.identifier .. ")") },
                     { name = "Spieler", value = target.getName() .. " (" .. target.identifier .. ")" },
                     { name = "Modell", value = vehicleModel },
                     { name = "Kennzeichen", value = plate }
@@ -1173,12 +1156,16 @@ RegisterCommand("givecar", function(source, args)
     end
 
     -- Notifications
-    xPlayer.showNotification(
-        ConfigGiveCar.Messages.carGivenAdmin
-            :gsub("%%model%%", vehicleModel)
-            :gsub("%%plate%%", plate)
-            :gsub("%%id%%", targetId)
-    )
+    local adminMessage = ConfigGiveCar.Messages.carGivenAdmin
+        :gsub("%%model%%", vehicleModel)
+        :gsub("%%plate%%", plate)
+        :gsub("%%id%%", targetId)
+
+    if isConsole then
+        print("[GiveCar] " .. adminMessage)
+    else
+        xPlayer.showNotification(adminMessage)
+    end
 
     target.showNotification(
         ConfigGiveCar.Messages.carGivenPlayer
@@ -1190,6 +1177,85 @@ RegisterCommand("givecar", function(source, args)
     if ConfigGiveCar.SpawnVehicleOnGive then
         TriggerClientEvent("givecar:spawn", targetId, vehicleModel, plate)
     end
+end)
+
+---------------------------------------------------------------
+-- MODUL: SetCar (aktuelles Fahrzeug des Admins an einen Spieler vergeben)
+---------------------------------------------------------------
+RegisterNetEvent("mc_core:setcar")
+AddEventHandler("mc_core:setcar", function(targetId, vehicleProps, displayName)
+    local source = source
+    local xPlayer = ESX.GetPlayerFromId(source)
+
+    if not xPlayer then return end
+
+    -- Admin Check (gleiche Gruppen wie GiveCar)
+    if not ConfigGiveCar.AdminGroups[xPlayer.getGroup()] then
+        xPlayer.showNotification(ConfigGiveCar.Messages.noPerms)
+        return
+    end
+
+    if type(vehicleProps) ~= "table" or not vehicleProps.model then
+        return
+    end
+
+    targetId = tonumber(targetId)
+    local target = targetId and ESX.GetPlayerFromId(targetId)
+
+    if not target then
+        xPlayer.showNotification(ConfigGiveCar.Messages.playerNotFound)
+        return
+    end
+
+    -- Plate übernehmen, sonst Auto-Plate wie bei GiveCar
+    local plate = vehicleProps.plate and vehicleProps.plate:gsub("%s+", "") or ""
+
+    if plate == "" and ConfigGiveCar.AutoPlate.enabled then
+        plate = ConfigGiveCar.AutoPlate.prefix .. "" .. GenerateRandomString(ConfigGiveCar.AutoPlate.length)
+    end
+
+    vehicleProps.plate = plate
+
+    local modelLabel = displayName or tostring(vehicleProps.model)
+
+    -- DB Insert
+    MySQL.insert('INSERT INTO owned_vehicles (owner, plate, vehicle, stored) VALUES (?, ?, ?, ?)', {
+        target.identifier,
+        plate,
+        json.encode(vehicleProps),
+        1
+    })
+
+    -- Logging
+    if ConfigGiveCar.Logging.enabled and ConfigGiveCar.Logging.webhook ~= "" then
+        PerformHttpRequest(ConfigGiveCar.Logging.webhook, function() end, "POST", json.encode({
+            username = ConfigGiveCar.Logging.username,
+            embeds = {{
+                title = ConfigGiveCar.Logging.titleSetCar,
+                color = ConfigGiveCar.Logging.color,
+                fields = {
+                    { name = "Admin", value = xPlayer.getName() .. " (" .. xPlayer.identifier .. ")" },
+                    { name = "Spieler", value = target.getName() .. " (" .. target.identifier .. ")" },
+                    { name = "Modell", value = modelLabel },
+                    { name = "Kennzeichen", value = plate }
+                }
+            }}
+        }), { ["Content-Type"] = "application/json" })
+    end
+
+    -- Notifications
+    xPlayer.showNotification(
+        ConfigGiveCar.Messages.carGivenAdmin
+            :gsub("%%model%%", modelLabel)
+            :gsub("%%plate%%", plate)
+            :gsub("%%id%%", targetId)
+    )
+
+    target.showNotification(
+        ConfigGiveCar.Messages.carGivenPlayer
+            :gsub("%%model%%", modelLabel)
+            :gsub("%%plate%%", plate)
+    )
 end)
 
 ---------------------------------------------------------------
@@ -1299,14 +1365,15 @@ AddEventHandler("mc_core:maut:pay", function(tollName, price, speed)
         return
     end
 
-    -- Normaler Cooldown: verhindert zu schnelles erneutes Bezahlen NACH dem Verlassen der Zone
+    -- Cooldown gilt erst NACH dem Verlassen der Zone (wird im exit-Event
+    -- gesetzt, siehe unten) - verhindert sofortiges erneutes Abbuchen,
+    -- wenn man knapp am Zonenrand kurz raus und wieder reinfährt.
     if MautCooldowns[identifier][tollName] and MautCooldowns[identifier][tollName] > now then
         return
     end
 
     -- Sperre setzen: Spieler gilt jetzt als "in der Maut", bis Client den Austritt meldet
     MautActive[identifier][tollName] = true
-    MautCooldowns[identifier][tollName] = now + MautConfig.Cooldown
 
     if MautConfig.FreeJobs[xPlayer.job.name] then
         TriggerClientEvent("mc_core:notifyClient", source, "Mautstelle", "Du darfst kostenlos passieren.", "info")
@@ -1340,16 +1407,21 @@ AddEventHandler("mc_core:maut:pay", function(tollName, price, speed)
     end
 end)
 
--- Client meldet, dass die Zone verlassen wurde -> Sperre aufheben
+-- Client meldet, dass die Zone verlassen wurde -> Sperre aufheben und
+-- den Cooldown erst JETZT starten (3 Sekunden, siehe MautConfig.Cooldown)
 RegisterNetEvent("mc_core:maut:exit")
 AddEventHandler("mc_core:maut:exit", function(tollName)
     local xPlayer = ESX.GetPlayerFromId(source)
     if not xPlayer then return end
 
     local identifier = xPlayer.identifier
+
     if MautActive[identifier] then
         MautActive[identifier][tollName] = nil
     end
+
+    MautCooldowns[identifier] = MautCooldowns[identifier] or {}
+    MautCooldowns[identifier][tollName] = os.time() + MautConfig.Cooldown
 end)
 
 RegisterNetEvent("mc_core:maut:policeAlert")
@@ -1898,6 +1970,20 @@ local function isBypass(hash)
     return false
 end
 
+-- Set aus team_groups für schnellen Lookup (statt jedes Mal die Liste zu durchlaufen)
+local teamJobSet = {}
+for _, job in ipairs(namecheckCfg.bypass.team_groups) do
+    teamJobSet[job] = true
+end
+
+-- Team-Erkennung läuft über die ESX-Gruppe (users.group) aus der DB,
+-- NICHT über den Job (kein ACE, kein add_ace/add_principal nötig).
+-- Sobald die Gruppe eines Charakters in bypass.team_groups steht,
+-- gilt er als Teammitglied - unabhängig davon welchen Job er gerade hat.
+local function isTeamJob(group)
+    return namecheckCfg.naming.team.enabled and teamJobSet[group] == true
+end
+
 local function buildName(job, firstname, lastname)
     local template = namecheckCfg.naming.standard
 
@@ -1910,13 +1996,23 @@ local function buildName(job, firstname, lastname)
                    :gsub("{lastname}", lastname)
 end
 
+-- Team-Namensschema: IMMER "[MC] | Vorname Nachname", unabhängig davon
+-- welcher Job es konkret ist (überschreibt also das normale Job-Schema).
+local function buildTeamName(firstname, lastname)
+    local template = namecheckCfg.naming.team.template
+
+    return template:gsub("{firstname}", firstname)
+                   :gsub("{lastname}", lastname)
+end
+
+
 -- Holt alle Charaktere des Spielers.
 -- multichar.enabled = true  -> char1:/char2:/char3: Format (LIKE-Suche über alle Slots)
 -- multichar.enabled = false -> normales Single-Char Format (identifier = license:hash)
 local function getCharacterRows(hash)
     if namecheckCfg.multichar.enabled then
         local likePattern = namecheckCfg.multichar.db_prefix_pattern:format(hash) -- z.B. "char%:d349c528..."
-        local query = ("SELECT firstname, lastname, job, identifier FROM %s WHERE %s LIKE ?"):format(
+        local query = ("SELECT firstname, lastname, job, `group`, identifier FROM %s WHERE %s LIKE ?"):format(
             namecheckCfg.multichar.table,
             namecheckCfg.multichar.identifier_column
         )
@@ -1924,7 +2020,7 @@ local function getCharacterRows(hash)
         return rows or {}
     else
         local row = MySQL.single.await(
-            "SELECT firstname, lastname, job FROM users WHERE identifier = ?",
+            "SELECT firstname, lastname, job, `group` FROM users WHERE identifier = ?",
             { namecheckCfg.identifier.type .. ":" .. hash }
         )
         return row and { row } or {}
@@ -1954,17 +2050,35 @@ AddEventHandler("playerConnecting", function(playerName, setKickReason, deferral
 
     local rows = getCharacterRows(hash)
 
+    -- FIX: Wenn (noch) kein Charakter existiert, ist das ein neuer
+    -- Spieler, der sich gerade erst einen Charakter erstellen will.
+    -- Der Namecheck kann in diesem Fall gar nicht greifen (es gibt
+    -- ja noch keinen Namen zum Prüfen) - vorher wurde hier fälschlich
+    -- abgelehnt, wodurch neue Spieler nie einen Charakter anlegen
+    -- konnten. Jetzt einfach durchlassen; der Check greift erst wieder,
+    -- sobald ein Charakter (mit Job/Namen) in der DB existiert.
     if not rows or #rows == 0 then
-        return deferrals.done(t.no_chars_found)
+        namecheckLog(("Kein Charakter für %s (%s) - neuer Spieler, wird durchgelassen"):format(playerName, hash))
+        return deferrals.done()
     end
 
     -- Multichar: prüfen ob EINER der Charaktere passt
     -- Single-Char: es gibt eh nur einen Eintrag -> gleiches Verhalten wie vorher
+    -- Ist die Gruppe (users.group) des Charakters in bypass.team_groups
+    -- gelistet, gilt NUR das Team-Schema "[MC] | Vorname Nachname" - das
+    -- normale Job-Schema wird dafür nicht mehr geprüft, auch wenn der
+    -- Job z.B. "police" wäre.
     local matched = false
     local lastExpectedName = nil
 
     for _, result in ipairs(rows) do
-        local expectedName = buildName(result.job, result.firstname, result.lastname)
+        local expectedName
+        if isTeamJob(result.group) then
+            expectedName = buildTeamName(result.firstname, result.lastname)
+        else
+            expectedName = buildName(result.job, result.firstname, result.lastname)
+        end
+
         lastExpectedName = expectedName
 
         if playerName == expectedName then
@@ -2370,3 +2484,2047 @@ AddEventHandler("mc_core:verkauf:sell", function(routeName, amount)
     })
 
 end)
+
+---------------------------------------------------------------
+-- MODUL: CarryPeople (SERVER)
+---------------------------------------------------------------
+-- Ersetzt das vorherige selbstgebaute Carry-System.
+local carrying = {}
+-- carrying[source] = targetSource, source trägt targetSource
+local carried = {}
+-- carried[targetSource] = source, targetSource wird von source getragen
+
+RegisterServerEvent("CarryPeople:sync")
+AddEventHandler("CarryPeople:sync", function(targetSrc)
+    if not Config.CarryPeople.enabled then return end
+    local source = source
+    local sourcePed = GetPlayerPed(source)
+    local sourceCoords = GetEntityCoords(sourcePed)
+    local targetPed = GetPlayerPed(targetSrc)
+    local targetCoords = GetEntityCoords(targetPed)
+    if #(sourceCoords - targetCoords) <= Config.CarryPeople.maxDistance then
+        TriggerClientEvent("CarryPeople:syncTarget", targetSrc, source)
+        carrying[source] = targetSrc
+        carried[targetSrc] = source
+    end
+end)
+
+RegisterServerEvent("CarryPeople:stop")
+AddEventHandler("CarryPeople:stop", function(targetSrc)
+    local source = source
+
+    if carrying[source] then
+        TriggerClientEvent("CarryPeople:cl_stop", targetSrc)
+        carrying[source] = nil
+        carried[targetSrc] = nil
+    elseif carried[source] then
+        TriggerClientEvent("CarryPeople:cl_stop", carried[source])
+        carrying[carried[source]] = nil
+        carried[source] = nil
+    end
+end)
+
+AddEventHandler('playerDropped', function(reason)
+    local source = source
+
+    if carrying[source] then
+        TriggerClientEvent("CarryPeople:cl_stop", carrying[source])
+        carried[carrying[source]] = nil
+        carrying[source] = nil
+    end
+
+    if carried[source] then
+        TriggerClientEvent("CarryPeople:cl_stop", carried[source])
+        carrying[carried[source]] = nil
+        carried[source] = nil
+    end
+end)
+
+---------------------------------------------------------------
+-- MODUL: Jail (esx_jail)
+---------------------------------------------------------------
+-- Uebernommen aus dem eigenstaendigen "esx_jail"-Script.
+-- Config.Locale wurde zu Config.JailLocale umbenannt (Konflikt mit
+-- mc_core's Config.Locale = 'de', siehe config.lua).
+---------------------------------------------------------------
+
+ESX = ESX or exports['es_extended']:getSharedObject() -- bereits oben in server.lua gesetzt, hier nur zur Sicherheit idempotent
+
+-- ActiveInmates[identifier] = { jailId, time, name, source (falls online, sonst nil) }
+local ActiveInmates = {}
+-- AdminInmates[identifier] = { time, name, reason, source, returnCoords = {x,y,z,h} }
+-- Eigenständiges System für /adminjail: keine Gefängnis-Zuordnung, fixer Ort (Config.AdminJail.Position),
+-- Rückkehr an die Position, an der der Spieler stand, als er eingesperrt wurde.
+local AdminInmates = {}
+local WorkCooldowns = {}
+local BribeCooldowns = {}
+local EscapeCooldowns = {}
+
+-- ####################################################
+-- ##                   HELPERS                       ##
+-- ####################################################
+
+local function HasJob(xPlayer, jobList)
+    for _, job in ipairs(jobList) do
+        if xPlayer.job.name == job then return true end
+    end
+    return false
+end
+
+local function Log(identifier, name, action, details, jailId)
+    MySQL.insert('INSERT INTO jail_log (identifier, name, action, details, jail_id) VALUES (?, ?, ?, ?, ?)',
+        { identifier, name, action, details or '', jailId or 0 })
+end
+
+-- ####################################################
+-- ##             LADEN BEIM RESOURCE-START           ##
+-- ####################################################
+
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    MySQL.query('SELECT * FROM jail_inmates', {}, function(rows)
+        if not rows then return end
+        for _, row in ipairs(rows) do
+            ActiveInmates[row.identifier] = {
+                jailId = row.jail_id,
+                time = row.time,
+                name = row.name,
+                reason = row.reason,
+                source = nil
+            }
+        end
+    end)
+
+    MySQL.query('SELECT * FROM admin_jail WHERE in_jail = 1', {}, function(rows)
+        if not rows then return end
+        for _, row in ipairs(rows) do
+            AdminInmates[row.identifier] = {
+                time = row.jail_time,
+                name = row.name,
+                reason = row.jail_reason,
+                source = nil,
+                returnCoords = { x = row.return_x, y = row.return_y, z = row.return_z, h = row.return_h }
+            }
+        end
+    end)
+end)
+
+
+-- ####################################################
+-- ##                VERHAFTEN                        ##
+-- ####################################################
+
+local function JailPlayer(officerSource, targetId, jailId, minutes, reason, location, jobList)
+    local xOfficer = ESX.GetPlayerFromId(officerSource)
+    local xTarget = ESX.GetPlayerFromId(targetId)
+    if not xOfficer or not xTarget then return false end
+
+    if not HasJob(xOfficer, jobList) then
+        TriggerClientEvent('esx_jail:notify', officerSource, Config.JailLocale.not_allowed_job, 'error')
+        return false
+    end
+
+    local jail = Config.Jails[jailId]
+    if not jail then return false end
+
+    location = (location == 'yard') and 'yard' or 'cell'
+
+    local identifier = xTarget.identifier
+    local name = xTarget.getName()
+
+    -- Inventar / Waffen sichern
+    if Config.RemoveWeaponsOnArrest or Config.RemoveItemsOnArrest then
+        local loadout = Config.RemoveWeaponsOnArrest and xTarget.getLoadout() or {}
+        local inventory = Config.RemoveItemsOnArrest and xTarget.getInventory() or {}
+
+        MySQL.insert('INSERT INTO jail_storage (identifier, skin, loadout, inventory, jail_id) VALUES (?, ?, ?, ?, ?) '
+            .. 'ON DUPLICATE KEY UPDATE loadout = VALUES(loadout), inventory = VALUES(inventory), jail_id = VALUES(jail_id)',
+            { identifier, '', json.encode(loadout), json.encode(inventory), jailId })
+
+        if Config.RemoveWeaponsOnArrest then
+            for _, weapon in ipairs(loadout) do
+                xTarget.removeWeapon(weapon.name)
+            end
+        end
+        if Config.RemoveItemsOnArrest then
+            for _, item in ipairs(inventory) do
+                if item.count and item.count > 0 then
+                    xTarget.removeInventoryItem(item.name, item.count)
+                end
+            end
+        end
+    end
+
+    reason = (reason and reason ~= '') and reason or 'Kein Grund angegeben'
+
+    MySQL.insert('INSERT INTO jail_inmates (identifier, name, jail_id, time, officer, reason) VALUES (?, ?, ?, ?, ?, ?)',
+        { identifier, name, jailId, minutes, xOfficer.getName(), reason })
+
+    ActiveInmates[identifier] = { jailId = jailId, time = minutes, name = name, reason = reason, source = targetId }
+
+    Log(identifier, name, 'jailed', ('von %s | Grund: %s'):format(xOfficer.getName(), reason), jailId)
+
+    TriggerClientEvent('esx_jail:sendToJail', targetId, jailId, minutes, reason, location)
+    TriggerClientEvent('esx_jail:notify', officerSource, ('%s wurde verhaftet.'):format(name), 'success')
+
+    return true
+end
+
+-- /arrest (Nähe-Check, Config.ArrestJobs) -> landet immer in der Zelle
+local function ArrestPlayer(officerSource, targetId, jailId, minutes, reason)
+    return JailPlayer(officerSource, targetId, jailId, minutes, reason, 'cell', Config.ArrestJobs)
+end
+
+RegisterNetEvent('esx_jail:arrestPlayer', function(targetId, jailId, minutes, reason)
+    local officerSource = source
+    ArrestPlayer(officerSource, targetId, jailId, minutes, reason)
+end)
+
+-- Einsperren über das Verwaltungsmenü DES jeweiligen Gefängnisses: prüft die
+-- managementJobs dieses Gefängnisses (nicht Config.ArrestJobs) und erlaubt die
+-- Wahl zwischen Zelle und Hof.
+RegisterNetEvent('esx_jail:jailPlayerFromMenu', function(targetId, jailId, location, minutes, reason)
+    local officerSource = source
+    local jail = Config.Jails[jailId]
+    if not jail then return end
+
+    JailPlayer(officerSource, targetId, jailId, minutes, reason, location, jail.managementJobs)
+end)
+
+-- Liste aller Online-Spieler für das "Spieler einsperren"-Menü eines Gefängnisses
+-- (die eigentliche Berechtigungsprüfung erfolgt beim Einsperren selbst über managementJobs)
+ESX.RegisterServerCallback('esx_jail:getOnlinePlayers', function(source, cb)
+    local list = {}
+    for _, playerId in ipairs(ESX.GetPlayers()) do
+        if playerId ~= source then
+            local xTarget = ESX.GetPlayerFromId(playerId)
+            if xTarget then
+                list[#list + 1] = { id = playerId, name = xTarget.getName() }
+            end
+        end
+    end
+    cb(list)
+end)
+
+-- ####################################################
+-- ##                 ENTLASSEN                       ##
+-- ####################################################
+
+local function ReleasePlayer(identifier, byOfficerName)
+    local inmate = ActiveInmates[identifier]
+    if not inmate then return false end
+
+    local jailId = inmate.jailId
+    local xTarget = inmate.source and ESX.GetPlayerFromId(inmate.source) or nil
+
+    -- Inventar / Waffen wiederherstellen
+    MySQL.query('SELECT * FROM jail_storage WHERE identifier = ?', { identifier }, function(rows)
+        if rows and rows[1] and xTarget then
+            local loadout = json.decode(rows[1].loadout or '[]') or {}
+            local inventory = json.decode(rows[1].inventory or '[]') or {}
+
+            for _, weapon in ipairs(loadout) do
+                xTarget.addWeapon(weapon.name, weapon.ammo or 0)
+            end
+            for _, item in ipairs(inventory) do
+                if item.count and item.count > 0 then
+                    xTarget.addInventoryItem(item.name, item.count)
+                end
+            end
+        end
+        MySQL.query('DELETE FROM jail_storage WHERE identifier = ?', { identifier })
+    end)
+
+    MySQL.query('DELETE FROM jail_inmates WHERE identifier = ?', { identifier })
+    Log(identifier, inmate.name, 'released', byOfficerName and ('entlassen von ' .. byOfficerName) or 'Strafe abgesessen', jailId)
+
+    if inmate.source then
+        TriggerClientEvent('esx_jail:releaseFromJail', inmate.source, jailId)
+    end
+
+    ActiveInmates[identifier] = nil
+    return true
+end
+
+-- Entlässt einen Insassen aus dem separaten Admin-Jail-System und teleportiert ihn
+-- zurück an die Position, an der er ursprünglich eingesperrt wurde.
+local function ReleaseAdminInmate(identifier, byOfficerName)
+    local inmate = AdminInmates[identifier]
+    if not inmate then return false end
+
+    local xTarget = inmate.source and ESX.GetPlayerFromId(inmate.source) or nil
+
+    -- Inventar / Waffen wiederherstellen
+    MySQL.query('SELECT * FROM jail_storage WHERE identifier = ?', { identifier }, function(rows)
+        if rows and rows[1] and xTarget then
+            local loadout = json.decode(rows[1].loadout or '[]') or {}
+            local inventory = json.decode(rows[1].inventory or '[]') or {}
+
+            for _, weapon in ipairs(loadout) do
+                xTarget.addWeapon(weapon.name, weapon.ammo or 0)
+            end
+            for _, item in ipairs(inventory) do
+                if item.count and item.count > 0 then
+                    xTarget.addInventoryItem(item.name, item.count)
+                end
+            end
+        end
+        MySQL.query('DELETE FROM jail_storage WHERE identifier = ?', { identifier })
+    end)
+
+    MySQL.update('UPDATE admin_jail SET in_jail = 0 WHERE identifier = ?', { identifier })
+    Log(identifier, inmate.name, 'released', byOfficerName and ('entlassen von ' .. byOfficerName) or 'Strafe abgesessen (Admin-Jail)', 0)
+
+    if inmate.source then
+        TriggerClientEvent('esx_jail:releaseFromAdminJail', inmate.source, inmate.returnCoords)
+    end
+
+    AdminInmates[identifier] = nil
+    return true
+end
+
+RegisterNetEvent('esx_jail:releaseByOfficer', function(identifier)
+    local src = source
+    local xOfficer = ESX.GetPlayerFromId(src)
+    if not xOfficer then return end
+
+    local inmate = ActiveInmates[identifier]
+    if not inmate then return end
+
+    local jail = Config.Jails[inmate.jailId]
+    if not jail or not HasJob(xOfficer, jail.managementJobs) then
+        TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.not_allowed_job, 'error')
+        return
+    end
+
+    ReleasePlayer(identifier, xOfficer.getName())
+    TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.time_updated, 'success')
+end)
+
+RegisterNetEvent('esx_jail:updateTime', function(identifier, newMinutes)
+    local src = source
+    local xOfficer = ESX.GetPlayerFromId(src)
+    if not xOfficer then return end
+
+    local inmate = ActiveInmates[identifier]
+    if not inmate then return end
+
+    local jail = Config.Jails[inmate.jailId]
+    if not jail or not HasJob(xOfficer, jail.managementJobs) then
+        TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.not_allowed_job, 'error')
+        return
+    end
+
+    newMinutes = tonumber(newMinutes) or inmate.time
+    inmate.time = newMinutes
+    MySQL.update('UPDATE jail_inmates SET time = ? WHERE identifier = ?', { newMinutes, identifier })
+    Log(identifier, inmate.name, 'time_updated', ('neue Reststrafe: %s Minuten (von %s)'):format(newMinutes, xOfficer.getName()), inmate.jailId)
+
+    if inmate.source then
+        TriggerClientEvent('esx_jail:updateTimeDisplay', inmate.source, newMinutes)
+    end
+    TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.time_updated, 'success')
+end)
+
+-- ####################################################
+-- ##                  TIMER-LOOP                     ##
+-- ####################################################
+
+CreateThread(function()
+    while true do
+        Wait(60000) -- jede Minute
+        for identifier, inmate in pairs(ActiveInmates) do
+            inmate.time = inmate.time - 1
+            if inmate.time <= 0 then
+                ReleasePlayer(identifier, nil)
+            else
+                MySQL.update('UPDATE jail_inmates SET time = ? WHERE identifier = ?', { inmate.time, identifier })
+                if inmate.source then
+                    TriggerClientEvent('esx_jail:updateTimeDisplay', inmate.source, inmate.time)
+                end
+            end
+        end
+
+        for identifier, inmate in pairs(AdminInmates) do
+            inmate.time = inmate.time - 1
+            if inmate.time <= 0 then
+                ReleaseAdminInmate(identifier, nil)
+            else
+                MySQL.update('UPDATE admin_jail SET jail_time = ? WHERE identifier = ?', { inmate.time, identifier })
+                if inmate.source then
+                    TriggerClientEvent('esx_jail:updateAdminTimeDisplay', inmate.source, inmate.time)
+                end
+            end
+        end
+    end
+end)
+
+-- ####################################################
+-- ##      SPIELER JOINT WIEDER (war schon inhaftiert) ##
+-- ####################################################
+
+ESX.RegisterServerCallback('esx_jail:checkOnLoad', function(source, cb)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return cb(nil) end
+
+    local identifier = xPlayer.identifier
+
+    local inmate = ActiveInmates[identifier]
+    if inmate then
+        inmate.source = source
+        return cb({ type = 'jail', jailId = inmate.jailId, time = inmate.time, reason = inmate.reason })
+    end
+
+    local adminInmate = AdminInmates[identifier]
+    if adminInmate then
+        adminInmate.source = source
+        return cb({ type = 'admin', time = adminInmate.time, reason = adminInmate.reason })
+    end
+
+    cb(nil)
+end)
+
+-- ####################################################
+-- ##                MANAGEMENT-MENÜ                  ##
+-- ####################################################
+
+ESX.RegisterServerCallback('esx_jail:getInmates', function(source, cb, jailId)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    local jail = Config.Jails[jailId]
+    if not xPlayer or not jail or not HasJob(xPlayer, jail.managementJobs) then
+        return cb({})
+    end
+
+    local list = {}
+    for identifier, inmate in pairs(ActiveInmates) do
+        if inmate.jailId == jailId then
+            list[#list + 1] = {
+                identifier = identifier,
+                name = inmate.name,
+                time = inmate.time,
+                online = inmate.source ~= nil
+            }
+        end
+    end
+    cb(list)
+end)
+
+ESX.RegisterServerCallback('esx_jail:getLog', function(source, cb, jailId, page)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    local jail = Config.Jails[jailId]
+    if not xPlayer or not jail or not HasJob(xPlayer, jail.managementJobs) then
+        return cb({})
+    end
+
+    page = page or 0
+    MySQL.query('SELECT * FROM jail_log WHERE jail_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+        { jailId, Config.LogEntriesPerPage, page * Config.LogEntriesPerPage }, function(rows)
+        cb(rows or {})
+    end)
+end)
+
+-- ####################################################
+-- ##                    ARBEITEN                     ##
+-- ####################################################
+
+RegisterNetEvent('esx_jail:workComplete', function(workIndex, jailId)
+    local src = source
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer or not Config.Work.enabled then return end
+
+    local jail = Config.Jails[jailId]
+    if not jail then return end
+    local work = jail.workPoints[workIndex]
+    if not work then return end
+
+    local identifier = xPlayer.identifier
+    local inmate = ActiveInmates[identifier]
+    if not inmate then return end -- kein Insasse -> keine Belohnung
+
+    local now = os.time()
+    WorkCooldowns[identifier] = WorkCooldowns[identifier] or {}
+    if WorkCooldowns[identifier][workIndex] and now < WorkCooldowns[identifier][workIndex] then
+        TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.work_cooldown, 'error')
+        return
+    end
+    WorkCooldowns[identifier][workIndex] = now + work.cooldown
+
+    inmate.time = math.max(0, inmate.time - work.reward)
+    MySQL.update('UPDATE jail_inmates SET time = ? WHERE identifier = ?', { inmate.time, identifier })
+    Log(identifier, inmate.name, 'work', ('%s | -%s Minuten'):format(work.label, work.reward), jailId)
+
+    TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.work_done:format(work.reward), 'success')
+    TriggerClientEvent('esx_jail:updateTimeDisplay', src, inmate.time)
+
+    if inmate.time <= 0 then
+        ReleasePlayer(identifier, nil)
+    end
+end)
+
+-- ####################################################
+-- ##                  BESTECHUNG                     ##
+-- ####################################################
+
+RegisterNetEvent('esx_jail:bribeAttempt', function(nearbyGuardIds)
+    local src = source
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer or not Config.Bribe.enabled then return end
+
+    local identifier = xPlayer.identifier
+    local inmate = ActiveInmates[identifier]
+    if not inmate then return end
+
+    if Config.Bribe.requireNearbyGuard then
+        local hasGuard = false
+        for _, guardId in ipairs(nearbyGuardIds or {}) do
+            local xGuard = ESX.GetPlayerFromId(guardId)
+            if xGuard and HasJob(xGuard, Config.Bribe.guardJobs) then
+                hasGuard = true
+                break
+            end
+        end
+        if not hasGuard then
+            TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.bribe_no_guard, 'error')
+            return
+        end
+    end
+
+    local now = os.time()
+    if BribeCooldowns[identifier] and now < BribeCooldowns[identifier] then
+        TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.bribe_cooldown, 'error')
+        return
+    end
+    BribeCooldowns[identifier] = now + Config.Bribe.cooldown
+
+    if xPlayer.getMoney() < Config.Bribe.cost then
+        TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.bribe_no_money, 'error')
+        return
+    end
+    xPlayer.removeMoney(Config.Bribe.cost)
+
+    local success = math.random(1, 100) <= Config.Bribe.chance
+
+    if success then
+        inmate.time = math.max(0, inmate.time - Config.Bribe.successTimeReduction)
+        Log(identifier, inmate.name, 'bribed_success', ('-%s Minuten'):format(Config.Bribe.successTimeReduction), inmate.jailId)
+        TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.bribe_success:format(Config.Bribe.successTimeReduction), 'success')
+    else
+        inmate.time = inmate.time + Config.Bribe.failPunishment
+        Log(identifier, inmate.name, 'bribed_fail', ('+%s Minuten'):format(Config.Bribe.failPunishment), inmate.jailId)
+        TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.bribe_fail:format(Config.Bribe.failPunishment), 'error')
+    end
+
+    MySQL.update('UPDATE jail_inmates SET time = ? WHERE identifier = ?', { inmate.time, identifier })
+    TriggerClientEvent('esx_jail:updateTimeDisplay', src, inmate.time)
+
+    if Config.Bribe.notifyGuardsOnAttempt then
+        for _, guardId in ipairs(nearbyGuardIds or {}) do
+            TriggerClientEvent('esx_jail:notify', guardId,
+                ('%s hat versucht dich zu bestechen (%s).'):format(inmate.name, success and 'Erfolg' or 'Fehlschlag'),
+                success and 'error' or 'success')
+        end
+    end
+
+    if inmate.time <= 0 then
+        ReleasePlayer(identifier, nil)
+    end
+end)
+
+-- ####################################################
+-- ##                 FLUCHT-ALARM                    ##
+-- ####################################################
+
+RegisterNetEvent('esx_jail:escapeAttempt', function(jailId)
+    local src = source
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer or not Config.Escape.enabled then return end
+
+    local identifier = xPlayer.identifier
+    local inmate = ActiveInmates[identifier]
+    if not inmate then return end
+
+    local now = os.time()
+    if EscapeCooldowns[identifier] and now < EscapeCooldowns[identifier] then return end
+    EscapeCooldowns[identifier] = now + Config.Escape.alertCooldown
+
+    local jail = Config.Jails[jailId]
+    Log(identifier, inmate.name, 'escaped', 'Fluchtversuch erkannt', jailId)
+
+    for _, playerId in ipairs(ESX.GetPlayers()) do
+        local xTarget = ESX.GetPlayerFromId(playerId)
+        if xTarget and HasJob(xTarget, Config.Escape.alertJobs) then
+            TriggerClientEvent('esx_jail:escapeAlert', xTarget.source, jail and jail.label or 'Unbekanntes Gefängnis', inmate.name)
+        end
+    end
+end)
+
+RegisterNetEvent('esx_jail:escapeCoords', function(jailId, coords)
+    local src = source
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer then return end
+
+    for _, playerId in ipairs(ESX.GetPlayers()) do
+        local xTarget = ESX.GetPlayerFromId(playerId)
+        if xTarget and HasJob(xTarget, Config.Escape.alertJobs) then
+            TriggerClientEvent('esx_jail:escapeBlip', xTarget.source, coords)
+        end
+    end
+end)
+
+-- ####################################################
+-- ##       AUSBRUCH PER MINISPIEL (/ausbrechen)      ##
+-- ####################################################
+-- Nur relevant für ActiveInmates (normales Jail) - AdminJail-Insassen landen
+-- nie in dieser Tabelle, das Minispiel kann dort also gar nicht greifen.
+RegisterNetEvent('esx_jail:escapeMinigameSuccess', function(jailId)
+    local src = source
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer or not Config.Escape.enabled or not Config.Escape.minigame.enabled then return end
+
+    local identifier = xPlayer.identifier
+    local inmate = ActiveInmates[identifier]
+    if not inmate then return end
+
+    local jail = Config.Jails[jailId]
+
+    Log(identifier, inmate.name, 'escaped', 'Erfolgreicher Ausbruch (Minispiel)', jailId)
+    TriggerClientEvent('esx_jail:notify', src, 'Ausbruch erfolgreich!', 'success')
+
+    -- Wachen trotzdem alarmieren, wie beim "klassischen" Fluchtversuch
+    for _, playerId in ipairs(ESX.GetPlayers()) do
+        local xTarget = ESX.GetPlayerFromId(playerId)
+        if xTarget and HasJob(xTarget, Config.Escape.alertJobs) then
+            TriggerClientEvent('esx_jail:escapeAlert', xTarget.source, jail and jail.label or 'Unbekanntes Gefängnis', inmate.name)
+        end
+    end
+
+    -- Vollständige Entlassung (Inventar/Waffen zurück, Teleport zu jail.releaseCoords) -
+    -- exakt dieselbe Funktion, die auch beim regulären Entlassen genutzt wird.
+    ReleasePlayer(identifier, 'Ausbruch (Minispiel)')
+end)
+
+RegisterNetEvent('esx_jail:escapeMinigameFail', function(jailId)
+    local src = source
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer then return end
+
+    local identifier = xPlayer.identifier
+    local inmate = ActiveInmates[identifier]
+    if not inmate then return end
+
+    Log(identifier, inmate.name, 'escape_failed', 'Fehlgeschlagener Ausbruchsversuch (Minispiel)', jailId)
+
+    local penalty = Config.Escape.minigame and Config.Escape.minigame.failPenaltyMinutes or 0
+    if penalty and penalty > 0 then
+        inmate.time = inmate.time + penalty
+        MySQL.update('UPDATE jail_inmates SET time = ? WHERE identifier = ?', { inmate.time, identifier })
+        TriggerClientEvent('esx_jail:updateTimeDisplay', src, inmate.time)
+        TriggerClientEvent('esx_jail:notify', src, ('Fehlgeschlagener Ausbruch! +%d Minuten Strafe.'):format(penalty), 'error')
+    end
+end)
+
+
+-- ####################################################
+-- ##               ESSEN / TRINKEN                   ##
+-- ####################################################
+
+RegisterNetEvent('esx_jail:giveFood', function(targetId, itemConfig)
+    local src = source
+    local xGuard = ESX.GetPlayerFromId(src)
+    local xTarget = ESX.GetPlayerFromId(targetId)
+    if not xGuard or not xTarget then return end
+
+    if not HasJob(xGuard, Config.ArrestJobs) then
+        TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.not_allowed_job, 'error')
+        return
+    end
+
+    if xGuard.getInventoryItem(itemConfig.item).count < 1 then
+        TriggerClientEvent('esx_jail:notify', src, 'Du hast diesen Gegenstand nicht.', 'error')
+        return
+    end
+
+    xGuard.removeInventoryItem(itemConfig.item, 1)
+    TriggerClientEvent('esx_jail:consumeFood', targetId, itemConfig)
+    TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.food_given, 'success')
+end)
+
+-- ####################################################
+-- ##                ADMIN-FUNKTIONEN                 ##
+-- ####################################################
+-- Eigenständiges, von Config.Jails komplett unabhängiges System:
+-- kein Gefängnis auswählbar, fixer Teleport-Ort (Config.AdminJail.Position),
+-- Rückkehr an die ursprüngliche Position nach Ablauf/Entlassung.
+
+local function IsAdmin(source)
+    if not Config.AdminJail.enabled then return false end
+    if source == 0 then return true end -- Server-Konsole
+
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return false end
+
+    return Config.AdminJail.admingroups[xPlayer.getGroup()] == true
+end
+
+-- Erlaubt dem Client zu prüfen, ob der Spieler die Admin-Jail-Berechtigung hat
+ESX.RegisterServerCallback('esx_jail:isAdmin', function(source, cb)
+    cb(IsAdmin(source))
+end)
+
+local function SendAdminWebhook(text)
+    if not Config.AdminJail.webhook or Config.AdminJail.webhook == '' then return end
+    PerformHttpRequest(Config.AdminJail.webhook, function() end, 'POST', json.encode({ content = text }), { ['Content-Type'] = 'application/json' })
+end
+
+-- Sperrt einen Spieler unabhängig von managementJobs/ArrestJobs ein (nur ACE-Permission aus Config.AdminJail).
+-- Kein jailId mehr: Teleport immer zu Config.AdminJail.Position, Rückkehr-Koordinaten werden vor dem
+-- Teleport gesichert und bei Entlassung/Ablauf wiederhergestellt.
+local function AdminJailPlayer(adminName, targetId, minutes, reason)
+    local xTarget = ESX.GetPlayerFromId(targetId)
+    if not xTarget then return false, 'Ungültige Spieler-ID.' end
+
+    local identifier = xTarget.identifier
+    local name = xTarget.getName()
+    reason = (reason and reason ~= '') and reason or Config.AdminJail.defaultReason
+
+    local targetPed = GetPlayerPed(targetId)
+    local coords = GetEntityCoords(targetPed)
+    local heading = GetEntityHeading(targetPed)
+
+    if Config.RemoveWeaponsOnArrest or Config.RemoveItemsOnArrest then
+        local loadout = Config.RemoveWeaponsOnArrest and xTarget.getLoadout() or {}
+        local inventory = Config.RemoveItemsOnArrest and xTarget.getInventory() or {}
+
+        MySQL.insert('INSERT INTO jail_storage (identifier, skin, loadout, inventory, jail_id) VALUES (?, ?, ?, ?, ?) '
+            .. 'ON DUPLICATE KEY UPDATE loadout = VALUES(loadout), inventory = VALUES(inventory), jail_id = VALUES(jail_id)',
+            { identifier, '', json.encode(loadout), json.encode(inventory), 0 })
+
+        if Config.RemoveWeaponsOnArrest then
+            for _, weapon in ipairs(loadout) do xTarget.removeWeapon(weapon.name) end
+        end
+        if Config.RemoveItemsOnArrest then
+            for _, item in ipairs(inventory) do
+                if item.count and item.count > 0 then xTarget.removeInventoryItem(item.name, item.count) end
+            end
+        end
+    end
+
+    MySQL.insert('INSERT INTO admin_jail (identifier, name, jail_time, jail_reason, in_jail, return_x, return_y, return_z, return_h) '
+        .. 'VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?) '
+        .. 'ON DUPLICATE KEY UPDATE name = VALUES(name), jail_time = VALUES(jail_time), jail_reason = VALUES(jail_reason), '
+        .. 'in_jail = 1, return_x = VALUES(return_x), return_y = VALUES(return_y), return_z = VALUES(return_z), return_h = VALUES(return_h)',
+        { identifier, name, minutes, reason, coords.x, coords.y, coords.z, heading })
+
+    AdminInmates[identifier] = {
+        time = minutes,
+        name = name,
+        reason = reason,
+        source = targetId,
+        returnCoords = { x = coords.x, y = coords.y, z = coords.z, h = heading }
+    }
+
+    if Config.AdminJail.logActions then
+        Log(identifier, name, 'jailed', ('ADMIN (%s) | Grund: %s'):format(adminName or 'Konsole', reason), 0)
+    end
+
+    TriggerClientEvent('esx_jail:sendToAdminJail', targetId, minutes, reason)
+    SendAdminWebhook(('🔒 **%s** wurde von **%s** ins Admin-Jail gesperrt (%s Min.) | Grund: %s')
+        :format(name, adminName or 'Konsole', minutes, reason))
+    return true
+end
+
+-- Liste aller Online-Spieler für das Admin-Menü
+ESX.RegisterServerCallback('esx_jail:adminGetPlayers', function(source, cb)
+    if not IsAdmin(source) then return cb({}) end
+
+    local list = {}
+    for _, playerId in ipairs(ESX.GetPlayers()) do
+        local xTarget = ESX.GetPlayerFromId(playerId)
+        if xTarget then
+            list[#list + 1] = { id = playerId, name = xTarget.getName() }
+        end
+    end
+    cb(list)
+end)
+
+-- Alle aktuellen Admin-Jail-Insassen (unabhängig von Config.Jails)
+ESX.RegisterServerCallback('esx_jail:adminGetAllInmates', function(source, cb)
+    if not IsAdmin(source) then return cb({}) end
+
+    local list = {}
+    for identifier, inmate in pairs(AdminInmates) do
+        list[#list + 1] = {
+            identifier = identifier,
+            name = inmate.name,
+            time = inmate.time,
+            online = inmate.source ~= nil
+        }
+    end
+    cb(list)
+end)
+
+RegisterNetEvent('esx_jail:adminJailPlayer', function(targetId, minutes, reason)
+    local src = source
+    if not IsAdmin(src) then
+        TriggerClientEvent('esx_jail:notify', src, 'Keine Berechtigung.', 'error')
+        return
+    end
+
+    local xAdmin = ESX.GetPlayerFromId(src)
+    local ok, err = AdminJailPlayer(xAdmin and xAdmin.getName() or 'Admin', targetId, minutes, reason)
+    if ok then
+        TriggerClientEvent('esx_jail:notify', src, 'Spieler wurde eingesperrt.', 'success')
+    else
+        TriggerClientEvent('esx_jail:notify', src, err, 'error')
+    end
+end)
+
+RegisterNetEvent('esx_jail:adminUpdateTime', function(identifier, newMinutes)
+    local src = source
+    if not IsAdmin(src) then
+        TriggerClientEvent('esx_jail:notify', src, 'Keine Berechtigung.', 'error')
+        return
+    end
+
+    local inmate = AdminInmates[identifier]
+    if not inmate then return end
+
+    newMinutes = tonumber(newMinutes) or inmate.time
+    inmate.time = newMinutes
+    MySQL.update('UPDATE admin_jail SET jail_time = ? WHERE identifier = ?', { newMinutes, identifier })
+    if Config.AdminJail.logActions then
+        Log(identifier, inmate.name, 'time_updated', ('neue Reststrafe: %s Minuten (Admin)'):format(newMinutes), 0)
+    end
+
+    if inmate.source then
+        TriggerClientEvent('esx_jail:updateAdminTimeDisplay', inmate.source, newMinutes)
+    end
+    TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.time_updated, 'success')
+end)
+
+RegisterNetEvent('esx_jail:adminRelease', function(identifier)
+    local src = source
+    if not IsAdmin(src) then
+        TriggerClientEvent('esx_jail:notify', src, 'Keine Berechtigung.', 'error')
+        return
+    end
+
+    local xAdmin = ESX.GetPlayerFromId(src)
+    if ReleaseAdminInmate(identifier, xAdmin and xAdmin.getName() or 'ADMIN') then
+        TriggerClientEvent('esx_jail:notify', src, Config.JailLocale.time_updated, 'success')
+    end
+end)
+
+-- /putinjail [id] [minuten] [grund] -- Konsole/Chat-Variante
+if Config.AdminJail.enabled then
+    RegisterCommand(Config.AdminJail.consoleCommand, function(source, args)
+        if not IsAdmin(source) then
+            TriggerClientEvent('esx_jail:notify', source, 'Keine Berechtigung.', 'error')
+            return
+        end
+
+        local targetId = tonumber(args[1])
+        local minutes = tonumber(args[2])
+        local reason = table.concat(args, ' ', 3) or ''
+
+        if not targetId or not minutes then
+            print(('Verwendung: /%s [id] [minuten] [grund]'):format(Config.AdminJail.consoleCommand))
+            return
+        end
+
+        local adminName = 'Konsole'
+        if source ~= 0 then
+            local xAdmin = ESX.GetPlayerFromId(source)
+            adminName = xAdmin and xAdmin.getName() or ('Server-ID ' .. source)
+        end
+
+        local ok, err = AdminJailPlayer(adminName, targetId, minutes, reason)
+        if not ok then print(err) end
+    end, false)
+end
+
+-- ####################################################
+-- ##                    EXPORTS                      ##
+-- ####################################################
+
+exports('IsPlayerJailed', function(identifier)
+    return ActiveInmates[identifier] ~= nil
+end)
+
+exports('JailPlayer', function(source, jailId, minutes, reason)
+    return ArrestPlayer(source, source, jailId, minutes, reason)
+end)
+
+---------------------------------------------------------------
+-- MODUL: PiggyBack (SERVER)
+---------------------------------------------------------------
+local piggybacking = {}
+-- piggybacking[source] = targetSource, source trägt targetSource huckepack
+local beingPiggybacked = {}
+-- beingPiggybacked[targetSource] = source, targetSource wird von source getragen
+
+RegisterServerEvent("Piggyback:sync")
+AddEventHandler("Piggyback:sync", function(targetSrc)
+    if not Config.PiggyBack.enabled then return end
+    local source = source
+    local sourcePed = GetPlayerPed(source)
+    local sourceCoords = GetEntityCoords(sourcePed)
+    local targetPed = GetPlayerPed(targetSrc)
+    local targetCoords = GetEntityCoords(targetPed)
+    if #(sourceCoords - targetCoords) <= Config.PiggyBack.maxDistance then
+        TriggerClientEvent("Piggyback:syncTarget", targetSrc, source)
+        piggybacking[source] = targetSrc
+        beingPiggybacked[targetSrc] = source
+    end
+end)
+
+RegisterServerEvent("Piggyback:stop")
+AddEventHandler("Piggyback:stop", function(targetSrc)
+    local source = source
+
+    if piggybacking[source] then
+        TriggerClientEvent("Piggyback:cl_stop", targetSrc)
+        piggybacking[source] = nil
+        beingPiggybacked[targetSrc] = nil
+    elseif beingPiggybacked[source] then
+        TriggerClientEvent("Piggyback:cl_stop", beingPiggybacked[source])
+        beingPiggybacked[source] = nil
+        piggybacking[beingPiggybacked[source]] = nil
+    end
+end)
+
+AddEventHandler('playerDropped', function(reason)
+    local source = source
+
+    if piggybacking[source] then
+        TriggerClientEvent("Piggyback:cl_stop", piggybacking[source])
+        beingPiggybacked[piggybacking[source]] = nil
+        piggybacking[source] = nil
+    end
+
+    if beingPiggybacked[source] then
+        TriggerClientEvent("Piggyback:cl_stop", beingPiggybacked[source])
+        piggybacking[beingPiggybacked[source]] = nil
+        beingPiggybacked[source] = nil
+    end
+end)
+
+---------------------------------------------------------------
+-- MODUL: TakeHostage (SERVER)
+---------------------------------------------------------------
+local takingHostage = {}
+-- takingHostage[source] = targetSource, source nimmt targetSource als Geisel
+local takenHostage = {}
+-- takenHostage[targetSource] = source, targetSource wird von source als Geisel gehalten
+
+RegisterServerEvent("TakeHostage:sync")
+AddEventHandler("TakeHostage:sync", function(targetSrc)
+    if not Config.TakeHostage.enabled then return end
+    local source = source
+
+    TriggerClientEvent("TakeHostage:syncTarget", targetSrc, source)
+    takingHostage[source] = targetSrc
+    takenHostage[targetSrc] = source
+end)
+
+RegisterServerEvent("TakeHostage:releaseHostage")
+AddEventHandler("TakeHostage:releaseHostage", function(targetSrc)
+    local source = source
+    if takenHostage[targetSrc] then
+        TriggerClientEvent("TakeHostage:releaseHostage", targetSrc, source)
+        takingHostage[source] = nil
+        takenHostage[targetSrc] = nil
+    end
+end)
+
+RegisterServerEvent("TakeHostage:killHostage")
+AddEventHandler("TakeHostage:killHostage", function(targetSrc)
+    local source = source
+    if takenHostage[targetSrc] then
+        TriggerClientEvent("TakeHostage:killHostage", targetSrc, source)
+        takingHostage[source] = nil
+        takenHostage[targetSrc] = nil
+    end
+end)
+
+RegisterServerEvent("TakeHostage:stop")
+AddEventHandler("TakeHostage:stop", function(targetSrc)
+    local source = source
+
+    if takingHostage[source] then
+        TriggerClientEvent("TakeHostage:cl_stop", targetSrc)
+        takingHostage[source] = nil
+        takenHostage[targetSrc] = nil
+    elseif takenHostage[source] then
+        TriggerClientEvent("TakeHostage:cl_stop", targetSrc)
+        takenHostage[source] = nil
+        takingHostage[targetSrc] = nil
+    end
+end)
+
+AddEventHandler('playerDropped', function(reason)
+    local source = source
+
+    if takingHostage[source] then
+        TriggerClientEvent("TakeHostage:cl_stop", takingHostage[source])
+        takenHostage[takingHostage[source]] = nil
+        takingHostage[source] = nil
+    end
+
+    if takenHostage[source] then
+        TriggerClientEvent("TakeHostage:cl_stop", takenHostage[source])
+        takingHostage[takenHostage[source]] = nil
+        takenHostage[source] = nil
+    end
+end)
+
+---------------------------------------------------------------
+-- MODUL: Lifeinvader (SERVER)
+---------------------------------------------------------------
+-- Alle sicherheitsrelevanten Prüfungen laufen HIER, nicht im Client:
+-- Länge, verbotene Wörter, Cooldown und der zu zahlende Preis werden
+-- ausschließlich aus dem Server-Config berechnet. Der Client schickt
+-- nur den rohen Text - alles andere kann er nicht beeinflussen, das
+-- verhindert sowohl Preis-Manipulation als auch doppeltes Abschicken.
+do
+    local liEsx = exports[Config.Lifeinvader.esxSharedObject]:getSharedObject()
+    local liCooldowns = {} -- liCooldowns[identifier] = os.time() der letzten Werbung
+    local liSubmitting = {} -- liSubmitting[source] = true, während eine Anfrage verarbeitet wird (Anti-Dupe)
+    local liFeed = {} -- { {text=, name=, phone=, playerName=, time=os.time()}, ... } neueste zuerst, auf feed.maxPosts gedeckelt
+
+    local function liContainsForbiddenWord(text)
+        local lower = text:lower()
+        for _, word in ipairs(Config.Lifeinvader.forbiddenWords) do
+            if word ~= '' and lower:find(word:lower(), 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Fügt einen Post vorne in den Feed ein und kappt ihn danach auf feed.maxPosts
+    -- (ältester fliegt automatisch raus, siehe Config.feed.maxPosts).
+    local function liPushFeed(entry)
+        if not Config.Lifeinvader.feed.enabled then return end
+
+        table.insert(liFeed, 1, entry)
+
+        local max = Config.Lifeinvader.feed.maxPosts or 20
+        while #liFeed > max do
+            table.remove(liFeed)
+        end
+    end
+
+    -- Admin-Protokoll: loggt JEDEN Versuch (erfolgreich, geblockt, gekickt, ...) mit
+    -- Spieler-Identifier - unabhängig vom öffentlichen "discord"-Webhook.
+    local function liSendAdminDiscord(src, xPlayer, text, status, extra)
+        local ad = Config.Lifeinvader.adminDiscord
+        if not ad or not ad.enabled or not ad.webhook or ad.webhook == '' then return end
+
+        local playerLabel = xPlayer and ('%s (ID: %s | %s)'):format(GetPlayerName(src) or '?', src, xPlayer.identifier)
+            or ('ID: %s'):format(src)
+
+        PerformHttpRequest(ad.webhook, function() end, 'POST', json.encode({
+            username = ad.botName,
+            embeds = {{
+                title = 'Lifeinvader - Versuch',
+                color = ad.color,
+                fields = {
+                    { name = 'Spieler', value = playerLabel, inline = false },
+                    { name = 'Status', value = status, inline = true },
+                    { name = 'Text', value = (text ~= '' and text or '*(leer)*'), inline = false },
+                },
+                footer = { text = extra or '' },
+            }},
+        }), { ['Content-Type'] = 'application/json' })
+    end
+
+    local function liComputePrice(text)
+        if Config.Lifeinvader.price.mode == 'perChar' then
+            return #text * Config.Lifeinvader.price.perChar
+        end
+        return Config.Lifeinvader.price.fixed
+    end
+
+    -- Baut den rohen multipart/form-data Request-Body, damit wir Bilder direkt
+    -- MIT dem Webhook-Aufruf hochladen können (Discords "attachment://"-Feature).
+    -- Dadurch ist keine externe Bild-Hosting-URL nötig - die Bilder liegen im
+    -- Script selbst unter assets/discord/ und werden bei jedem Aufruf mitgeschickt.
+    local function liBuildMultipart(payloadJson, files, boundary)
+        local parts = {}
+
+        table.insert(parts, '--' .. boundary .. '\r\n')
+        table.insert(parts, 'Content-Disposition: form-data; name="payload_json"\r\n')
+        table.insert(parts, 'Content-Type: application/json\r\n\r\n')
+        table.insert(parts, payloadJson)
+        table.insert(parts, '\r\n')
+
+        for _, f in ipairs(files) do
+            table.insert(parts, '--' .. boundary .. '\r\n')
+            table.insert(parts, ('Content-Disposition: form-data; name="%s"; filename="%s"\r\n'):format(f.name, f.filename))
+            table.insert(parts, ('Content-Type: %s\r\n\r\n'):format(f.contentType))
+            table.insert(parts, f.data)
+            table.insert(parts, '\r\n')
+        end
+
+        table.insert(parts, '--' .. boundary .. '--\r\n')
+
+        return table.concat(parts)
+    end
+
+    local function liSendDiscord(playerName, text, price, name, phone)
+        if not Config.Lifeinvader.discord.enabled or Config.Lifeinvader.discord.webhook == '' then
+            return
+        end
+
+        local d = Config.Lifeinvader.discord
+        local anonymName = (Config.Lifeinvader.locales and Config.Lifeinvader.locales.anonymName) or 'ANONYM'
+
+        local displayName = (name ~= nil and name ~= '') and name or anonymName
+        local displayPhone = (phone ~= nil and phone ~= '') and phone or '-'
+
+        local embed = {
+            author = { name = 'LIFEINVADER' },
+            description = text,
+            color = d.color,
+            fields = {
+                { name = 'Name', value = displayName, inline = true },
+                { name = 'Telefon', value = displayPhone, inline = true },
+                { name = '\u{200B}', value = ('📍 %s'):format(playerName), inline = false },
+            },
+            footer = { text = ('Preis: %s$'):format(price) },
+        }
+
+        local files = {}
+
+        -- Logo: eigene URL aus der Config hat Vorrang, sonst wird das mitgelieferte
+        -- Bild aus assets/discord/discord_logo.png direkt mit hochgeladen.
+        if d.logoUrl ~= '' then
+            embed.author.icon_url = d.logoUrl
+        else
+            local logoData = LoadResourceFile(GetCurrentResourceName(), 'assets/discord/discord_logo.png')
+            if logoData then
+                embed.author.icon_url = 'attachment://discord_logo.png'
+                table.insert(files, { name = ('files[%d]'):format(#files), filename = 'discord_logo.png', contentType = 'image/png', data = logoData })
+            end
+        end
+
+        -- Balken: eigene URL aus der Config hat Vorrang, sonst das mitgelieferte
+        -- Bild aus assets/discord/discord_bar.png (roter Balken wie im Referenzbild).
+        if d.progressBarImage ~= '' then
+            embed.image = { url = d.progressBarImage }
+        else
+            local barData = LoadResourceFile(GetCurrentResourceName(), 'assets/discord/discord_bar.png')
+            if barData then
+                embed.image = { url = 'attachment://discord_bar.png' }
+                table.insert(files, { name = ('files[%d]'):format(#files), filename = 'discord_bar.png', contentType = 'image/png', data = barData })
+            end
+        end
+
+        local payload = json.encode({ username = d.botName, embeds = { embed } })
+
+        if #files > 0 then
+            local boundary = ('mc_core_%d_%d'):format(os.time(), math.random(100000, 999999))
+            local body = liBuildMultipart(payload, files, boundary)
+
+            PerformHttpRequest(d.webhook, function() end, 'POST', body, {
+                ['Content-Type'] = 'multipart/form-data; boundary=' .. boundary
+            })
+        else
+            PerformHttpRequest(d.webhook, function() end, 'POST', payload, {
+                ['Content-Type'] = 'application/json'
+            })
+        end
+    end
+
+    RegisterServerEvent(Config.Lifeinvader.eventPrefix .. ':submit')
+    AddEventHandler(Config.Lifeinvader.eventPrefix .. ':submit', function(text, withName, name, phone)
+        if not Config.Lifeinvader.enabled then return end
+
+        local src = source
+        local m = Config.Lifeinvader.messages
+
+        -- Anti-Dupe: solange eine vorherige Anfrage dieses Spielers noch läuft,
+        -- wird eine weitere ignoriert (verhindert doppeltes Spam-Klicken).
+        if liSubmitting[src] then return end
+        liSubmitting[src] = true
+
+        local xPlayer = liEsx.GetPlayerFromId(src)
+        if not xPlayer then
+            liSubmitting[src] = nil
+            return
+        end
+
+        if type(text) ~= 'string' then
+            liSubmitting[src] = nil
+            return
+        end
+
+        text = text:gsub('^%s+', ''):gsub('%s+$', '')
+        name = (type(name) == 'string') and name:gsub('^%s+', ''):gsub('%s+$', ''):sub(1, 60) or ''
+        phone = (type(phone) == 'string') and phone:gsub('^%s+', ''):gsub('%s+$', ''):sub(1, 30) or ''
+
+        if text == '' then
+            TriggerClientEvent(Config.Lifeinvader.eventPrefix .. ':result', src, false, m.empty)
+            liSendAdminDiscord(src, xPlayer, text, 'Abgelehnt: leer')
+            liSubmitting[src] = nil
+            return
+        end
+
+        if #text > Config.Lifeinvader.maxLength then
+            TriggerClientEvent(Config.Lifeinvader.eventPrefix .. ':result', src, false, m.tooLong:format(Config.Lifeinvader.maxLength))
+            liSendAdminDiscord(src, xPlayer, text, 'Abgelehnt: zu lang')
+            liSubmitting[src] = nil
+            return
+        end
+
+        -- Blacklist deckt Text, Name UND Telefonnummer ab, da alle drei öffentlich
+        -- sichtbar landen (Broadcast + Feed).
+        if liContainsForbiddenWord(text) or liContainsForbiddenWord(name) or liContainsForbiddenWord(phone) then
+            TriggerClientEvent(Config.Lifeinvader.eventPrefix .. ':result', src, false, m.forbiddenWord)
+
+            if Config.Lifeinvader.kickOnForbiddenWord then
+                liSendAdminDiscord(src, xPlayer, text, 'GEKICKT: verbotenes Wort/Zeichen', ('Name: %s | Telefon: %s'):format(name, phone))
+                liSubmitting[src] = nil
+                DropPlayer(src, Config.Lifeinvader.kickReason)
+                return
+            end
+
+            liSendAdminDiscord(src, xPlayer, text, 'Abgelehnt: verbotenes Wort/Zeichen', ('Name: %s | Telefon: %s'):format(name, phone))
+            liSubmitting[src] = nil
+            return
+        end
+
+        local identifier = xPlayer.identifier
+        local lastSent = liCooldowns[identifier]
+
+        if lastSent then
+            local elapsedMinutes = (os.time() - lastSent) / 60
+            local remaining = math.ceil(Config.Lifeinvader.cooldown - elapsedMinutes)
+
+            if remaining > 0 then
+                TriggerClientEvent(Config.Lifeinvader.eventPrefix .. ':result', src, false, m.cooldown:format(remaining))
+                liSubmitting[src] = nil
+                return
+            end
+        end
+
+        local price = liComputePrice(text)
+
+        if xPlayer.getMoney() < price then
+            TriggerClientEvent(Config.Lifeinvader.eventPrefix .. ':result', src, false, m.notEnoughMoney:format(price))
+            liSendAdminDiscord(src, xPlayer, text, 'Abgelehnt: kein Geld')
+            liSubmitting[src] = nil
+            return
+        end
+
+        xPlayer.removeMoney(price)
+        liCooldowns[identifier] = os.time()
+
+        -- Name nur anhängen, wenn das Modul es erlaubt UND der Spieler es im UI ausgewählt hat
+        local playerName = GetPlayerName(src)
+        local finalText = text
+
+        if Config.Lifeinvader.allowName and withName then
+            finalText = Config.Lifeinvader.nameFormat:format(text, playerName)
+        end
+
+        TriggerClientEvent(Config.Lifeinvader.eventPrefix .. ':result', src, true, m.success)
+        TriggerClientEvent(Config.Lifeinvader.eventPrefix .. ':broadcast', -1, finalText)
+
+        local feedEntry = {
+            text = finalText,
+            name = name,
+            phone = phone,
+            time = os.time(),
+        }
+        liPushFeed(feedEntry)
+        TriggerClientEvent(Config.Lifeinvader.eventPrefix .. ':feedPush', -1, feedEntry)
+
+        liSendDiscord(GetPlayerName(src), text, price, name, phone)
+        liSendAdminDiscord(src, xPlayer, text, 'Veröffentlicht', ('Preis: %s$ | Name: %s | Telefon: %s'):format(price, name, phone))
+
+        liSubmitting[src] = nil
+    end)
+
+    -- Ein Client fragt beim Öffnen des Menüs den aktuellen Feed-Stand ab (z.B. für
+    -- Spieler, die erst NACH den letzten Posts dazugekommen sind).
+    RegisterServerEvent(Config.Lifeinvader.eventPrefix .. ':requestFeed')
+    AddEventHandler(Config.Lifeinvader.eventPrefix .. ':requestFeed', function()
+        local src = source
+        TriggerClientEvent(Config.Lifeinvader.eventPrefix .. ':feedSync', src, liFeed)
+    end)
+
+    AddEventHandler('playerDropped', function()
+        local src = source
+        liSubmitting[src] = nil
+    end)
+end
+
+---------------------------------------------------------------
+-- MODUL: Formular  (übernommen aus mc_formular)
+---------------------------------------------------------------
+-- Chat-Command zusätzlich zum Standort-Trigger (siehe client.lua) -
+-- öffnet clientseitig einfach dieselbe NUI wie das [E] am Standort.
+RegisterCommand(FormularConfig.Command or "formular", function(source)
+    local src = source
+    if src == 0 then return end
+    TriggerClientEvent("mc_core:formular:open", src)
+end, false)
+
+RegisterNetEvent("formular:submit")
+AddEventHandler("formular:submit", function(data)
+    local src = source
+    if not src or src == 0 then return end
+
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer then return end
+
+    data = data or {}
+
+    -- Für Felder mit "auto" NIE den vom Client geschickten Wert übernehmen -
+    -- der könnte manipuliert sein. Stattdessen serverseitig aus den echten
+    -- ESX-Spielerdaten nachschlagen (aktuell nur "phone_number").
+    for _, v in ipairs(FormularConfig.Fields) do
+        if v.auto == "phone_number" then
+            data[v.id] = xPlayer.get and xPlayer.get('phone_number') or xPlayer.phone_number
+        end
+    end
+
+    local fields = {
+        {
+            name = "Spieler",
+            value = ("%s (ID: %s)"):format(GetPlayerName(src) or "Unbekannt", src),
+            inline = false
+        }
+    }
+
+    -- ipairs statt pairs, damit die Reihenfolge immer stimmt
+    for _, v in ipairs(FormularConfig.Fields) do
+        local value = data and data[v.id]
+
+        -- Discord lehnt Embeds mit leeren "value"-Feldern komplett ab -> dann kommt GAR KEIN Webhook an!
+        -- Deshalb IMMER einen gültigen, nicht-leeren String sicherstellen:
+        if value == nil or tostring(value):gsub("%s+", "") == "" then
+            value = "*(nicht ausgefüllt)*"
+        else
+            value = tostring(value)
+        end
+
+        table.insert(fields, {
+            name = v.label,
+            value = value,
+            inline = false
+        })
+    end
+
+    if not FormularConfig.Webhook or FormularConfig.Webhook == "" then return end
+
+    PerformHttpRequest(FormularConfig.Webhook, function(err, text, headers)
+        if err ~= 200 and err ~= 204 then
+            print(("[formular] Discord Webhook fehlgeschlagen! Status: %s | Antwort: %s"):format(tostring(err), tostring(text)))
+        end
+    end, "POST", json.encode({
+        username = FormularConfig.BotName,
+        embeds = {{
+            title = FormularConfig.Title,
+            color = FormularConfig.EmbedColor,
+            fields = fields
+        }}
+    }), { ["Content-Type"] = "application/json" })
+end)
+
+---------------------------------------------------------------
+-- MODUL: Zombie  (übernommen aus mc_zombie)
+---------------------------------------------------------------
+-- Zonen-Spawn-Verwaltung + Loot + persistente Kill-Rangliste (Discord).
+-- Nutzt ZombieConfig (siehe config.lua) statt eines eigenen "Config",
+-- und das bereits global gesetzte ESX-Objekt von mc_core (kein eigenes
+-- "local ESX = exports[...]" mehr nötig/möglich, da mc_core ESX schon
+-- ganz oben in dieser Datei global setzt).
+do
+    -- spawnSlots[index] = { occupied = bool, netId = number|nil }
+    local spawnSlots = {}
+    for i = 1, #ZombieConfig.ZombieSpawnPoints do
+        spawnSlots[i] = { occupied = false, netId = nil }
+    end
+
+    local activeZombieCount = 0
+    local reportedDead = {}      -- [netId] = true, verhindert doppelte Kill-Verarbeitung
+    local jackpotCounter = 0
+    local jackpotThreshold = math.random(ZombieConfig.JackpotThresholdMin, ZombieConfig.JackpotThresholdMax)
+
+    -- ------------------------------------------------
+    -- Spawn-Slot anfragen (Client -> Server)
+    -- ------------------------------------------------
+    RegisterNetEvent('zombie-script:requestSpawnSlot')
+    AddEventHandler('zombie-script:requestSpawnSlot', function()
+        local src = source
+
+        if activeZombieCount >= ZombieConfig.MaxZombiesInZone then
+            return
+        end
+
+        -- ersten freien Slot suchen
+        for index, slot in pairs(spawnSlots) do
+            if not slot.occupied then
+                slot.occupied = true
+                activeZombieCount = activeZombieCount + 1
+                TriggerClientEvent('zombie-script:spawnAtSlot', src, index, ZombieConfig.ZombieSpawnPoints[index])
+                return
+            end
+        end
+    end)
+
+    -- ------------------------------------------------
+    -- Client bestaetigt, dass der Zombie tatsaechlich erstellt wurde
+    -- ------------------------------------------------
+    RegisterNetEvent('zombie-script:zombieSpawned')
+    AddEventHandler('zombie-script:zombieSpawned', function(slotIndex, netId)
+        local slot = spawnSlots[slotIndex]
+        if slot then
+            slot.netId = netId
+        end
+    end)
+
+    -- ------------------------------------------------
+    -- Loot-Vergabe (ESX): Geld, normale Items, Jackpot
+    -- ------------------------------------------------
+    local function GiveZombieLoot(src)
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if not xPlayer then return end
+
+        local lootedItems = {}
+
+        if ZombieConfig.LootMoneyMax and ZombieConfig.LootMoneyMax > 0 then
+            local amount = math.random(ZombieConfig.LootMoneyMin, ZombieConfig.LootMoneyMax)
+            if amount > 0 then
+                xPlayer.addMoney(amount)
+                table.insert(lootedItems, ('$%d'):format(amount))
+            end
+        end
+
+        if ZombieConfig.LootTable then
+            for _, entry in ipairs(ZombieConfig.LootTable) do
+                if math.random(1, 100) <= entry.chance then
+                    local count = math.random(entry.min, entry.max)
+                    if count > 0 then
+                        xPlayer.addInventoryItem(entry.item, count)
+                        table.insert(lootedItems, ('%dx %s'):format(count, entry.item))
+                    end
+                end
+            end
+        end
+
+        -- Jackpot: alle X Kills (serverweit) bekommt GENAU dieser Kill ein Extra-Item
+        if ZombieConfig.JackpotEnabled then
+            jackpotCounter = jackpotCounter + 1
+            if jackpotCounter >= jackpotThreshold then
+                xPlayer.addInventoryItem(ZombieConfig.JackpotItem, 1)
+                table.insert(lootedItems, ('★ JACKPOT: %s'):format(ZombieConfig.JackpotItem))
+                jackpotCounter = 0
+                jackpotThreshold = math.random(ZombieConfig.JackpotThresholdMin, ZombieConfig.JackpotThresholdMax)
+            end
+        end
+
+        if ZombieConfig.NotifyOnLoot and #lootedItems > 0 then
+            TriggerClientEvent("chat:addMessage", src, {
+                args = { "^2[Loot]", "Erhalten: " .. table.concat(lootedItems, ", ") }
+            })
+        end
+
+        -- Kill fuer die Rangliste zaehlen
+        AddZombieKillForLeaderboard(src)
+    end
+
+    -- ------------------------------------------------
+    -- Ein Client meldet, dass ein Zombie gestorben ist.
+    -- killedByMe = true, wenn genau DIESER Client der Killer war (siehe Client-Code)
+    -- ------------------------------------------------
+    RegisterNetEvent('zombie-script:zombieDied')
+    AddEventHandler('zombie-script:zombieDied', function(netId, killedByMe)
+        if reportedDead[netId] then
+            return -- schon verarbeitet (z.B. von einem anderen Client gemeldet)
+        end
+        reportedDead[netId] = true
+
+        -- passenden Slot finden, um ihn wieder freizugeben
+        local foundSlot = nil
+        for index, slot in pairs(spawnSlots) do
+            if slot.netId == netId then
+                foundSlot = index
+                break
+            end
+        end
+
+        -- Loot nur vergeben, wenn dieser Client tatsaechlich der Killer war
+        if killedByMe then
+            GiveZombieLoot(source)
+        end
+
+        -- Slot nach Ablauf der Delete-Zeit wieder freigeben + Leiche loeschen lassen
+        SetTimeout(ZombieConfig.WaitForDelete, function()
+            if foundSlot then
+                spawnSlots[foundSlot].occupied = false
+                spawnSlots[foundSlot].netId = nil
+            end
+            activeZombieCount = math.max(0, activeZombieCount - 1)
+            reportedDead[netId] = nil
+
+            if ZombieConfig.DeleteDeadPeds then
+                TriggerClientEvent('zombie-script:deleteZombie', -1, netId)
+            end
+        end)
+    end)
+
+    print('[zombie] Server-Modul geladen.')
+end
+
+-- ============================================================
+--  ZOMBIE LEADERBOARD - persistente Kill-Zaehlung + Discord-Webhook
+-- ============================================================
+-- Läuft weiterhin als eigene JSON-Datei (leaderboard.json im
+-- mc_core-Ordner) statt DB-Tabelle - identisch zum Original, überlebt
+-- also Server-Neustarts ohne dass eine neue SQL-Tabelle nötig wäre.
+do
+    local killData = {} -- [identifier] = { name = "...", kills = 0 }
+    local dirty = false
+
+    local function LoadZombieLeaderboard()
+        local raw = LoadResourceFile(GetCurrentResourceName(), 'leaderboard.json')
+        if raw then
+            local ok, decoded = pcall(json.decode, raw)
+            if ok and decoded then
+                killData = decoded
+            end
+        end
+    end
+
+    local function SaveZombieLeaderboard()
+        SaveResourceFile(GetCurrentResourceName(), 'leaderboard.json', json.encode(killData), -1)
+        dirty = false
+    end
+
+    CreateThread(function()
+        LoadZombieLeaderboard()
+    end)
+
+    -- Alle 60s speichern, aber nur wenn sich seit dem letzten Mal was geaendert hat
+    CreateThread(function()
+        while true do
+            Wait(60 * 1000)
+            if dirty then
+                SaveZombieLeaderboard()
+            end
+        end
+    end)
+
+    -- ------------------------------------------------
+    -- Kill fuer einen Spieler zaehlen (global, wird oben vom Loot-Handler aufgerufen)
+    -- ------------------------------------------------
+    function AddZombieKillForLeaderboard(src)
+        local identifier = GetPlayerIdentifierByType(src, 'license')
+        if not identifier then
+            return
+        end
+
+        local name = GetPlayerName(src) or 'Unknown'
+
+        if not killData[identifier] then
+            killData[identifier] = { name = name, kills = 0 }
+        end
+
+        killData[identifier].name = name -- Namen aktuell halten, falls er sich geaendert hat
+        killData[identifier].kills = killData[identifier].kills + 1
+        dirty = true
+    end
+
+    -- ------------------------------------------------
+    -- Top-N Liste bauen
+    -- ------------------------------------------------
+    local function GetTopZombieKillers(count)
+        local list = {}
+        for _, data in pairs(killData) do
+            table.insert(list, data)
+        end
+
+        table.sort(list, function(a, b) return a.kills > b.kills end)
+
+        local top = {}
+        for i = 1, math.min(count, #list) do
+            table.insert(top, list[i])
+        end
+
+        return top
+    end
+
+    -- ------------------------------------------------
+    -- Discord-Embed bauen und per Webhook posten/editieren
+    -- ------------------------------------------------
+    local function BuildZombieDescription(topList)
+        if #topList == 0 then
+            return 'Noch keine Kills erfasst.'
+        end
+
+        local lines = {}
+        for i, entry in ipairs(topList) do
+            table.insert(lines, ('**#%d %s** - Kills: %d'):format(i, entry.name, entry.kills))
+        end
+
+        return table.concat(lines, '\n')
+    end
+
+    local function SendOrEditZombieWebhook()
+        local cfg = ZombieConfig.Webhook
+        if not cfg or not cfg.url or cfg.url == '' or cfg.url:find('DEINE_WEBHOOK_ID') then
+            print('[zombie] Webhook-URL ist nicht konfiguriert (config.lua -> ZombieConfig.Webhook.url) - Rangliste wird uebersprungen.')
+            return
+        end
+
+        local topList = GetTopZombieKillers(cfg.topCount or 10)
+
+        local embed = {
+            {
+                title = cfg.title,
+                description = BuildZombieDescription(topList),
+                color = cfg.color,
+                footer = { text = cfg.footerText .. ' - ' .. os.date('%d.%m.%Y | %H:%M') },
+            }
+        }
+
+        local payload = {
+            username = cfg.botName,
+            avatar_url = (cfg.avatarUrl ~= '' and cfg.avatarUrl or nil),
+            embeds = embed,
+        }
+
+        local headers = { ['Content-Type'] = 'application/json' }
+
+        if cfg.messageId and cfg.messageId ~= '' then
+            -- Vorhandene Nachricht editieren (kein Spam im Kanal)
+            local editUrl = cfg.url .. '/messages/' .. cfg.messageId
+            PerformHttpRequest(editUrl, function(statusCode, response, respHeaders)
+                if statusCode ~= 200 then
+                    print(('[zombie] Webhook-Edit fehlgeschlagen (Status %s). Pruefe messageId/URL in config.lua.'):format(tostring(statusCode)))
+                end
+            end, 'PATCH', json.encode(payload), headers)
+        else
+            -- Erste Nachricht erstellen (wait=true, damit wir die ID in der Antwort bekommen)
+            local postUrl = cfg.url .. '?wait=true'
+            PerformHttpRequest(postUrl, function(statusCode, response, respHeaders)
+                if statusCode == 200 or statusCode == 201 then
+                    local ok, decoded = pcall(json.decode, response)
+                    if ok and decoded and decoded.id then
+                        print('[zombie] Discord-Nachricht erstellt. Trage diese ID in config.lua unter ZombieConfig.Webhook.messageId ein, damit sie ab jetzt aktualisiert statt neu gepostet wird:')
+                        print('[zombie] messageId = "' .. decoded.id .. '"')
+                    end
+                else
+                    print(('[zombie] Webhook-Post fehlgeschlagen (Status %s). Pruefe die Webhook-URL in config.lua.'):format(tostring(statusCode)))
+                end
+            end, 'POST', json.encode(payload), headers)
+        end
+    end
+
+    CreateThread(function()
+        Wait(5000) -- kurz warten, bis alles geladen ist
+        SendOrEditZombieWebhook()
+
+        while true do
+            Wait(ZombieConfig.Webhook.refreshTime or (300 * 1000))
+            SendOrEditZombieWebhook()
+        end
+    end)
+
+    -- Beim Runterfahren der Ressource den aktuellen Stand sichern, falls noch nicht gespeichert
+    AddEventHandler('onResourceStop', function(resourceName)
+        if GetCurrentResourceName() ~= resourceName then
+            return
+        end
+        if dirty then
+            SaveZombieLeaderboard()
+        end
+    end)
+end
+
+---------------------------------------------------------------
+-- MODUL: CombatLog
+---------------------------------------------------------------
+do
+    local function SendCombatLogWebhook(name, reason)
+        local wh = Config.CombatLog.Webhook
+        if not wh.Enabled or wh.Url == "" then return end
+
+        PerformHttpRequest(wh.Url, function() end, "POST", json.encode({
+            username = wh.Username,
+            avatar_url = wh.AvatarUrl ~= "" and wh.AvatarUrl or nil,
+            embeds = {{
+                title = wh.Title,
+                color = wh.Color,
+                description = string.format("**%s** hat den Server verlassen.\nGrund: %s", name, reason),
+                thumbnail = wh.IconUrl ~= "" and { url = wh.IconUrl } or nil
+            }}
+        }), { ["Content-Type"] = "application/json" })
+    end
+
+    AddEventHandler('playerDropped', function(reason)
+        local src = source
+        if not Config.CombatLog.Enabled then return end
+
+        local ped = GetPlayerPed(src)
+        if not ped or ped == 0 then return end
+
+        local coords = GetEntityCoords(ped)
+        local name = GetPlayerName(src) or "Unbekannt"
+
+        -- Pruefen, ob ein anderer Spieler in Reichweite ist
+        local enemyNearby = false
+        for _, playerId in ipairs(GetPlayers()) do
+            if tonumber(playerId) ~= src then
+                local otherPed = GetPlayerPed(playerId)
+                if otherPed and otherPed ~= 0 then
+                    local otherCoords = GetEntityCoords(otherPed)
+                    if #(coords - otherCoords) <= Config.CombatLog.Range then
+                        enemyNearby = true
+                        break
+                    end
+                end
+            end
+        end
+
+        if not enemyNearby then return end
+
+        local text = string.format(
+            Config.CombatLog.Message,
+            os.date(Config.DateFormat or '%d.%m.%Y %H:%M'),
+            name,
+            reason
+        )
+
+        for _, playerId in ipairs(GetPlayers()) do
+            TriggerClientEvent('mc_core:combatlog:showMarker', tonumber(playerId), coords, text)
+        end
+
+        SendCombatLogWebhook(name, reason)
+    end)
+end
+
+---------------------------------------------------------------
+-- MODUL: Kampfunfaehig
+---------------------------------------------------------------
+do
+    local downedPlayers = {} -- [source] = { identifier = ..., startedAt = ..., forced = bool }
+
+    CreateThread(function()
+        MySQL.query([[
+            CREATE TABLE IF NOT EXISTS `mc_kampfunfaehig` (
+                `identifier` VARCHAR(60) PRIMARY KEY,
+                `started_at` BIGINT NOT NULL,
+                `duration` INT NOT NULL
+            )
+        ]])
+    end)
+
+    local function IsWhitelisted(xPlayer)
+        if not xPlayer then return false end
+
+        if Config.Kampfunfaehig.WhitelistedGroups[xPlayer.getGroup()] == true then
+            return true
+        end
+
+        local job = xPlayer.job and xPlayer.job.name
+        if job and Config.Kampfunfaehig.WhitelistedJobs[job] == true then
+            return true
+        end
+
+        return false
+    end
+
+    local function ClearDbEntry(identifier)
+        if not identifier then return end
+        MySQL.query('DELETE FROM mc_kampfunfaehig WHERE identifier = ?', { identifier })
+    end
+
+    local function SendWebhook(title, message)
+        if not Config.Kampfunfaehig.Webhook.Enabled or Config.Kampfunfaehig.Webhook.Url == "" then return end
+
+        PerformHttpRequest(Config.Kampfunfaehig.Webhook.Url, function() end, "POST", json.encode({
+            username = "Kampfunfähig Log",
+            embeds = {{
+                title = title,
+                description = message,
+                color = 15158332
+            }}
+        }), { ["Content-Type"] = "application/json" })
+    end
+
+    local function HasCommandPermission(xPlayer, cmdCfg)
+        if not xPlayer then return false end
+        return cmdCfg.groups[xPlayer.getGroup()] == true
+    end
+
+    ---------------------------------------------------------------
+    -- Normaler Ablauf: Spieler wird selbst kampfunfaehig (Tod)
+    ---------------------------------------------------------------
+
+    RegisterNetEvent('mc_core:kampfunfaehig:start', function()
+        local src = source
+        if not Config.Kampfunfaehig.Enabled then return end
+
+        local xPlayer = ESX.GetPlayerFromId(src)
+        if IsWhitelisted(xPlayer) then
+            TriggerClientEvent('mc_core:kampfunfaehig:skip', src)
+            return
+        end
+
+        local now = os.time()
+        downedPlayers[src] = { identifier = xPlayer and xPlayer.identifier, startedAt = now, duration = Config.Kampfunfaehig.Duration }
+
+        if Config.Kampfunfaehig.PersistOnRestart and xPlayer then
+            MySQL.query(
+                'INSERT INTO mc_kampfunfaehig (identifier, started_at, duration) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE started_at = ?, duration = ?',
+                { xPlayer.identifier, now, Config.Kampfunfaehig.Duration, now, Config.Kampfunfaehig.Duration }
+            )
+        end
+    end)
+
+    RegisterNetEvent('mc_core:kampfunfaehig:stop', function()
+        local src = source
+        local data = downedPlayers[src]
+        downedPlayers[src] = nil
+
+        if data and Config.Kampfunfaehig.PersistOnRestart then
+            ClearDbEntry(data.identifier)
+        end
+    end)
+
+    RegisterNetEvent('mc_core:kampfunfaehig:autoRespawn', function()
+        local src = source
+        local coords = Config.Kampfunfaehig.Hospitals[1] or vector3(0.0, 0.0, 0.0)
+
+        TriggerClientEvent('mc_core:kampfunfaehig:autoRespawnClient', src, coords)
+
+        local data = downedPlayers[src]
+        downedPlayers[src] = nil
+
+        if data and Config.Kampfunfaehig.PersistOnRestart then
+            ClearDbEntry(data.identifier)
+        end
+    end)
+
+    -- Nach Reconnect pruefen, ob der Spieler noch kampfunfaehig sein muesste
+    AddEventHandler(Config.Kampfunfaehig.SpawnEvent, function(playerId, xPlayer)
+        if not Config.Kampfunfaehig.Enabled or not Config.Kampfunfaehig.PersistOnRestart then return end
+        if not xPlayer then xPlayer = ESX.GetPlayerFromId(playerId) end
+        if IsWhitelisted(xPlayer) then return end
+
+        SetTimeout(Config.Kampfunfaehig.SpawnWait, function()
+            MySQL.single('SELECT started_at, duration FROM mc_kampfunfaehig WHERE identifier = ?', { xPlayer.identifier }, function(result)
+                if not result then return end
+
+                local elapsed = os.time() - result.started_at
+                local remaining = (result.duration or Config.Kampfunfaehig.Duration) - elapsed
+
+                if remaining <= 0 then
+                    ClearDbEntry(xPlayer.identifier)
+                    return
+                end
+
+                downedPlayers[playerId] = { identifier = xPlayer.identifier, startedAt = result.started_at, duration = result.duration }
+                TriggerClientEvent('mc_core:kampfunfaehig:resume', playerId, remaining)
+            end)
+        end)
+    end)
+
+    AddEventHandler('playerDropped', function()
+        local src = source
+        downedPlayers[src] = nil
+    end)
+
+    ---------------------------------------------------------------
+    -- Admin-Befehle: dtstart / dtclear / dtclearradius
+    ---------------------------------------------------------------
+
+    local function RegisterDtCommand(key)
+        local cmdCfg = Config.Kampfunfaehig.Commands[key]
+        if not cmdCfg or not cmdCfg.enabled then return end
+
+        RegisterCommand(cmdCfg.commandName, function(source, args)
+            local isConsole = source == 0
+            local L = Config.Kampfunfaehig.L
+
+            if isConsole and not cmdCfg.allowedFromConsole then
+                print(L("cannotBeUsedByConsole"))
+                return
+            end
+
+            local xPlayer = not isConsole and ESX.GetPlayerFromId(source) or nil
+
+            if not isConsole then
+                if not HasCommandPermission(xPlayer, cmdCfg) then
+                    MC_Notify("Kampfunfähig", L("noPermission"), "error")
+                    return
+                end
+
+                if not cmdCfg.allowedWhenDead and downedPlayers[source] then
+                    MC_Notify("Kampfunfähig", L("notAllowedWhenDead"), "error")
+                    return
+                end
+            end
+
+            if key == "dtstart" then
+                local targetId = tonumber(args[1])
+                local duration = tonumber(args[2])
+                local reason = table.concat(args, " ", 3)
+
+                if not targetId then
+                    if isConsole then print(L("noIdEntered")) else MC_Notify("Kampfunfähig", L("noIdEntered"), "error") end
+                    return
+                end
+
+                if not duration then
+                    if isConsole then print(L("noDurationEntered")) else MC_Notify("Kampfunfähig", L("noDurationEntered"), "error") end
+                    return
+                end
+
+                if cmdCfg.enterReason == "must" and reason == "" then
+                    if isConsole then print(L("noReasonEntered")) else MC_Notify("Kampfunfähig", L("noReasonEntered"), "error") end
+                    return
+                end
+
+                local targetPlayer = ESX.GetPlayerFromId(targetId)
+                if not targetPlayer then
+                    if isConsole then print(L("playerNotOnline")) else MC_Notify("Kampfunfähig", L("playerNotOnline"), "error") end
+                    return
+                end
+
+                if downedPlayers[targetId] then
+                    if isConsole then print(L("playerAlreadyInDt")) else MC_Notify("Kampfunfähig", L("playerAlreadyInDt"), "error") end
+                    return
+                end
+
+                downedPlayers[targetId] = { identifier = targetPlayer.identifier, startedAt = os.time(), duration = duration, forced = true }
+                TriggerClientEvent('mc_core:kampfunfaehig:forceStart', targetId, duration)
+
+                if isConsole then
+                    if reason ~= "" then
+                        SendWebhook(L("webhookDtStartConsoleTitle"), string.format(L("webhookDtStartConsoleMsg"), duration, targetPlayer.getName(), reason))
+                    else
+                        SendWebhook(L("webhookDtStartConsoleTitle"), string.format(L("webhookDtStartConsoleMsgNoReason"), duration, targetPlayer.getName()))
+                    end
+                else
+                    MC_Notify("Kampfunfähig", string.format(L("startedDt"), targetPlayer.getName()), "success")
+
+                    if reason ~= "" then
+                        SendWebhook(L("webhookDtStartClientTitle"), string.format(L("webhookDtStartClientMsg"), duration, targetPlayer.getName(), xPlayer.getName(), reason))
+                    else
+                        SendWebhook(L("webhookDtStartClientTitle"), string.format(L("webhookDtStartClientMsgNoReason"), duration, targetPlayer.getName(), xPlayer.getName()))
+                    end
+                end
+
+            elseif key == "dtclear" then
+                local targetId = tonumber(args[1])
+                local reason = table.concat(args, " ", 2)
+
+                if not targetId then
+                    if isConsole then print(L("noIdEntered")) else MC_Notify("Kampfunfähig", L("noIdEntered"), "error") end
+                    return
+                end
+
+                if cmdCfg.enterReason == "must" and reason == "" then
+                    if isConsole then print(L("noReasonEntered")) else MC_Notify("Kampfunfähig", L("noReasonEntered"), "error") end
+                    return
+                end
+
+                local targetPlayer = ESX.GetPlayerFromId(targetId)
+                if not targetPlayer then
+                    if isConsole then print(L("playerNotOnline")) else MC_Notify("Kampfunfähig", L("playerNotOnline"), "error") end
+                    return
+                end
+
+                if not downedPlayers[targetId] then
+                    if isConsole then print(L("playerNotInDt")) else MC_Notify("Kampfunfähig", L("playerNotInDt"), "error") end
+                    return
+                end
+
+                local data = downedPlayers[targetId]
+                downedPlayers[targetId] = nil
+                if data and Config.Kampfunfaehig.PersistOnRestart then ClearDbEntry(data.identifier) end
+
+                TriggerClientEvent('mc_core:kampfunfaehig:forceClear', targetId)
+
+                if isConsole then
+                    if reason ~= "" then
+                        SendWebhook(L("webhookDtClearConsoleTitle"), string.format(L("webhookDtClearConsoleMsg"), targetPlayer.getName(), reason))
+                    else
+                        SendWebhook(L("webhookDtClearConsoleTitle"), string.format(L("webhookDtClearConsoleMsgNoReason"), targetPlayer.getName()))
+                    end
+                else
+                    MC_Notify("Kampfunfähig", string.format(L("removedDt"), targetPlayer.getName()), "success")
+
+                    if reason ~= "" then
+                        SendWebhook(L("webhookDtClearClientTitle"), string.format(L("webhookDtClearClientMsg"), targetPlayer.getName(), xPlayer.getName(), reason))
+                    else
+                        SendWebhook(L("webhookDtClearClientTitle"), string.format(L("webhookDtClearClientMsgNoReason"), targetPlayer.getName(), xPlayer.getName()))
+                    end
+                end
+
+            elseif key == "dtclearradius" then
+                if isConsole then return end -- ergibt ohne eigene Position keinen Sinn
+
+                local radius = tonumber(args[1])
+                local reason = table.concat(args, " ", 2)
+
+                if not radius then
+                    MC_Notify("Kampfunfähig", L("noReasonEntered"), "error")
+                    return
+                end
+
+                if cmdCfg.enterReason == "must" and reason == "" then
+                    MC_Notify("Kampfunfähig", L("noReasonEntered"), "error")
+                    return
+                end
+
+                local ped = GetPlayerPed(source)
+                local myCoords = GetEntityCoords(ped)
+                local clearedNames = {}
+                local clearedCount = 0
+
+                for targetId, data in pairs(downedPlayers) do
+                    local targetPed = GetPlayerPed(targetId)
+                    if targetPed and targetPed ~= 0 then
+                        local dist = #(myCoords - GetEntityCoords(targetPed))
+                        if dist <= radius then
+                            local targetPlayer = ESX.GetPlayerFromId(targetId)
+                            downedPlayers[targetId] = nil
+                            if Config.Kampfunfaehig.PersistOnRestart then ClearDbEntry(data.identifier) end
+                            TriggerClientEvent('mc_core:kampfunfaehig:forceClear', targetId)
+                            clearedCount = clearedCount + 1
+                            clearedNames[#clearedNames + 1] = targetPlayer and targetPlayer.getName() or tostring(targetId)
+                        end
+                    end
+                end
+
+                if clearedCount == 0 then
+                    MC_Notify("Kampfunfähig", L("noPlayersNearby"), "error")
+                    return
+                end
+
+                MC_Notify("Kampfunfähig", string.format(L("removedDtRadius"), clearedCount), "success")
+
+                local namesStr = table.concat(clearedNames, ", ")
+                local coordsStr = string.format("%.1f, %.1f, %.1f", myCoords.x, myCoords.y, myCoords.z)
+
+                if reason ~= "" then
+                    SendWebhook(L("webhookDtClearRadiusClientTitle"), string.format(L("webhookDtClearRadiusClientMsg"), clearedCount, xPlayer.getName(), coordsStr, radius, namesStr, reason))
+                else
+                    SendWebhook(L("webhookDtClearRadiusClientTitle"), string.format(L("webhookDtClearRadiusClientMsgNoReason"), clearedCount, xPlayer.getName(), coordsStr, radius, namesStr))
+                end
+            end
+        end, false)
+    end
+
+    RegisterDtCommand("dtstart")
+    RegisterDtCommand("dtclear")
+    RegisterDtCommand("dtclearradius")
+end

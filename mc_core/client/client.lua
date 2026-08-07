@@ -106,26 +106,6 @@ end
 
 
 -- ============================================================
--- SECTION: Abschleppsystem.lua
--- ============================================================
-do
-    CreateThread(function()
-        while true do
-            Wait(3000)
-
-            local ped = PlayerPedId()
-            local veh = GetVehiclePedIsIn(ped, false)
-
-            if veh ~= 0 then
-                local plate = GetVehicleNumberPlateText(veh)
-                TriggerServerEvent("vehicleTrack:updateMovement", plate)
-            end
-        end
-    end)
-end
-
-
--- ============================================================
 -- SECTION: antiafk.lua (CLIENT)
 -- ============================================================
 do
@@ -139,26 +119,12 @@ do
         TriggerServerEvent('mc_core:updateActivity')
     end
 
-    function RotAnglesToVec(rot)
-        local z = math.rad(rot.z)
-        local x = math.rad(rot.x)
-        local num = math.abs(math.cos(x))
-
-        return vector3(-math.sin(z) * num, math.cos(z) * num, math.sin(x))
-    end
-
-    function RayCastGamePlayCamera(dist)
-        local camRot = GetGameplayCamRot()
-        local camCoord = GetGameplayCamCoord()
-
-        local direction = RotAnglesToVec(camRot)
-        local dest = camCoord + (direction * dist)
-
-        local rayHandle = StartShapeTestRay(camCoord.x, camCoord.y, camCoord.z, dest.x, dest.y, dest.z, -1, PlayerPedId(), 0)
-        local _, hit, endCoords, surfaceNormal, entityHit = GetShapeTestResult(rayHandle)
-
-        return hit, endCoords, surfaceNormal, entityHit
-    end
+    -- CamRotThreshold: ab wie viel Grad Blickrichtungsänderung pro Check als "aktiv" zählt.
+    -- (ersetzt den alten, kaputten Raycast-Check, der fast immer "true" ergeben hat,
+    --  weil ein Raycast von der Kamera aus so gut wie immer innerhalb von 5m etwas trifft
+    --  -> Spieler galt dadurch praktisch NIE als AFK)
+    local lastCamRot = nil
+    Config.AntiAFK.CamRotThreshold = Config.AntiAFK.CamRotThreshold or 1.5
 
     local function playerMoved()
         local cfg = Config.AntiAFK
@@ -167,26 +133,34 @@ do
 
         if lastPos == nil then
             lastPos = pos
+            lastCamRot = GetGameplayCamRot()
             return true
         end
 
         local dist = #(pos - lastPos)
         if dist > cfg.MoveThreshold then
             lastPos = pos
+            lastCamRot = GetGameplayCamRot()
             return true
         end
 
         local vel = GetEntityVelocity(ped)
         if #(vel) > cfg.VelocityThreshold then
             lastPos = pos
+            lastCamRot = GetGameplayCamRot()
             return true
         end
 
-        local hit = RayCastGamePlayCamera(cfg.CamRayCastDist)
-        if hit then
-            lastPos = pos
-            return true
+        local camRot = GetGameplayCamRot()
+        if lastCamRot ~= nil then
+            local rotDelta = #(camRot - lastCamRot) -- Delta der Kamera-Rotation in Grad
+            if rotDelta > cfg.CamRotThreshold then
+                lastCamRot = camRot
+                lastPos = pos
+                return true
+            end
         end
+        lastCamRot = camRot
 
         return false
     end
@@ -223,6 +197,13 @@ do
             ::continue::
         end
     end)
+
+    -- Debug: /afkstatus zeigt dir Restzeit bis zum Kick in der Konsole (F8)
+    RegisterCommand('afkstatus', function()
+        local elapsedMs = GetGameTimer() - lastActivity
+        local remainingSec = math.floor((Config.AntiAFK.KickAfterMinutes * 60) - (elapsedMs / 1000))
+        print(string.format("[AntiAFK] Letzte Aktivität vor %.1f Sekunden. Restzeit bis Kick: %d Sekunden.", elapsedMs / 1000, remainingSec))
+    end, false)
 end
 
 
@@ -479,6 +460,40 @@ do
 
             Wait(sleep)
         end
+    end)
+end
+
+
+-- ============================================================
+-- SECTION: combatlog.lua
+-- ============================================================
+do
+    RegisterNetEvent('mc_core:combatlog:showMarker')
+    AddEventHandler('mc_core:combatlog:showMarker', function(coords, text)
+        if not Config.CombatLog.Enabled then return end
+
+        CreateThread(function()
+            local endTime = GetGameTimer() + Config.CombatLog.MarkerTime
+            local mc = Config.CombatLog.MarkerColor
+            local tc = Config.CombatLog.TextColor
+
+            while GetGameTimer() < endTime do
+                DrawMarker(1, coords.x, coords.y, coords.z + 1.0, 0.0,0.0,0.0, 0.0,0.0,0.0, 1.0,1.0,1.0,
+                    mc.r, mc.g, mc.b, 150, false, true, 2, false, nil, nil, false)
+
+                SetDrawOrigin(coords.x, coords.y, coords.z + 1.2, 0)
+                BeginTextCommandDisplayText('STRING')
+                AddTextComponentSubstringPlayerName(text)
+                SetTextFont(4)
+                SetTextScale(0.35, 0.35)
+                SetTextColour(tc.r, tc.g, tc.b, 255)
+                SetTextCentre(true)
+                EndTextCommandDisplayText(0.0, 0.0)
+                ClearDrawOrigin()
+
+                Wait(0)
+            end
+        end)
     end)
 end
 
@@ -754,6 +769,30 @@ do
             SetEntityAsMissionEntity(vehicle, true, true)
         end)
     end)
+
+    RegisterCommand(ConfigGiveCar.Commands.setCar, function(_, args)
+        local ESX = exports["es_extended"]:getSharedObject()
+
+        local targetId = tonumber(args[1])
+
+        if not targetId then
+            ESX.ShowNotification(ConfigGiveCar.Messages.setCarUsage)
+            return
+        end
+
+        local playerPed = PlayerPedId()
+        local vehicle = GetVehiclePedIsIn(playerPed, false)
+
+        if vehicle == 0 or not DoesEntityExist(vehicle) then
+            ESX.ShowNotification(ConfigGiveCar.Messages.noVehicle)
+            return
+        end
+
+        local vehicleProps = ESX.Game.GetVehicleProperties(vehicle)
+        local displayName = GetDisplayNameFromVehicleModel(GetEntityModel(vehicle))
+
+        TriggerServerEvent("mc_core:setcar", targetId, vehicleProps, displayName)
+    end, false)
 end
 
 
@@ -1596,6 +1635,10 @@ do
         while true do
             Wait(500)
 
+            if not EnableNPCBlocker then
+                goto continue_outer
+            end
+
             local vehicles = GetGamePool("CVehicle")
 
             for _, veh in ipairs(vehicles) do
@@ -1652,11 +1695,13 @@ do
 
                 ::continue::
             end
+
+            ::continue_outer::
         end
     end)
 
     CreateThread(function()
-        while DebugNPCBlocker do
+        while EnableNPCBlocker and DebugNPCBlocker do
             Wait(0)
 
             DrawMarker(
@@ -1862,6 +1907,176 @@ do
             end
 
             Wait(sleep)
+        end
+    end)
+end
+
+
+-- ============================================================
+-- SECTION: kampfunfaehig.lua
+-- ============================================================
+do
+    local isDown = false
+    local remaining = 0
+    local totalDuration = 0
+    local canSelfRespawn = false
+
+    -- Hotbar-Tasten (1-9, INPUT_SELECT_WEAPON_*) waehrend der
+    -- Kampfunfaehigkeit blocken. Das eigentliche Inventar (TAB/I)
+    -- bleibt unberuehrt.
+    local hotbarControls = { 157, 158, 159, 160, 161, 162, 163, 164, 165 }
+
+    local function RunControlBlocker()
+        CreateThread(function()
+            while isDown do
+                local ped = PlayerPedId()
+
+                if Config.Kampfunfaehig.DisableHotbar then
+                    for _, control in ipairs(hotbarControls) do
+                        DisableControlAction(0, control, true)
+                    end
+                end
+
+                if type(Config.Kampfunfaehig.BlockedActions) == "function" then
+                    Config.Kampfunfaehig.BlockedActions(ped)
+                end
+
+                Wait(0)
+            end
+        end)
+    end
+
+    local function ShowHud(seconds)
+        SendNUIMessage({ action = "mc_core:kampfunfaehig:show" })
+        SendNUIMessage({ action = "mc_core:kampfunfaehig:update", seconds = seconds, total = totalDuration })
+    end
+
+    local function HideHud()
+        SendNUIMessage({ action = "mc_core:kampfunfaehig:hide" })
+    end
+
+    local function RunCountdown()
+        CreateThread(function()
+            while isDown and remaining > 0 do
+                Wait(1000)
+                remaining = remaining - 1
+                if isDown then ShowHud(remaining) end
+            end
+
+            if not isDown or remaining > 0 then return end
+
+            if Config.Kampfunfaehig.OnTimeoutAction == "auto_respawn" then
+                TriggerServerEvent('mc_core:kampfunfaehig:autoRespawn')
+            else
+                canSelfRespawn = true
+                MC_Notify("Kampfunfähig", Config.Kampfunfaehig.HudLocale.timeoutNotify, "info", 8000)
+            end
+        end)
+    end
+
+    local function EnterKampfunfaehig()
+        if isDown or not Config.Kampfunfaehig.Enabled then return end
+
+        local ped = PlayerPedId()
+        if type(Config.Kampfunfaehig.CanStart) == "function" and not Config.Kampfunfaehig.CanStart(ped) then
+            return
+        end
+
+        isDown = true
+        canSelfRespawn = false
+        remaining = Config.Kampfunfaehig.Duration
+        totalDuration = Config.Kampfunfaehig.Duration
+
+        TriggerServerEvent('mc_core:kampfunfaehig:start')
+        TriggerEvent(Config.Kampfunfaehig.DeathEvent)
+        RunControlBlocker()
+        ShowHud(remaining)
+        RunCountdown()
+    end
+
+    local function ExitKampfunfaehig()
+        if not isDown then return end
+
+        isDown = false
+        canSelfRespawn = false
+        HideHud()
+        TriggerServerEvent('mc_core:kampfunfaehig:stop')
+    end
+
+    -- Whitelisted Gruppen/Jobs (Admin/Sanitaeter): Server sagt "skip",
+    -- HUD/Sperren sofort wieder aufheben
+    RegisterNetEvent('mc_core:kampfunfaehig:skip', function()
+        ExitKampfunfaehig()
+    end)
+
+    -- Von einem Admin per /dtstart ausgeloest
+    RegisterNetEvent('mc_core:kampfunfaehig:forceStart', function(seconds)
+        if isDown then return end
+
+        local ped = PlayerPedId()
+        isDown = true
+        canSelfRespawn = false
+        remaining = seconds
+        totalDuration = seconds
+
+        MC_Notify("Kampfunfähig", Config.Kampfunfaehig.L("gotStartedDt"), "error")
+        RunControlBlocker()
+        ShowHud(remaining)
+        RunCountdown()
+    end)
+
+    -- Von einem Admin per /dtclear oder /dtclearradius ausgeloest
+    RegisterNetEvent('mc_core:kampfunfaehig:forceClear', function()
+        if not isDown then return end
+        MC_Notify("Kampfunfähig", Config.Kampfunfaehig.L("gotRemovedDt"), "success")
+        ExitKampfunfaehig()
+    end)
+
+    -- Nach Server-Neustart / Reconnect: Timer mit verbleibender Zeit fortsetzen
+    RegisterNetEvent('mc_core:kampfunfaehig:resume', function(secondsLeft)
+        isDown = true
+        canSelfRespawn = false
+        remaining = secondsLeft
+        totalDuration = Config.Kampfunfaehig.Duration
+
+        RunControlBlocker()
+        ShowHud(remaining)
+        RunCountdown()
+    end)
+
+    RegisterNetEvent('mc_core:kampfunfaehig:autoRespawnClient', function(coords)
+        DoScreenFadeOut(500)
+        Wait(500)
+
+        SetEntityCoords(PlayerPedId(), coords.x, coords.y, coords.z, false, false, false, true)
+        TriggerEvent(Config.Kampfunfaehig.ReviveEvent)
+
+        Wait(300)
+        DoScreenFadeIn(500)
+
+        ExitKampfunfaehig()
+    end)
+
+    CreateThread(function()
+        while true do
+            local ped = PlayerPedId()
+            local dead = IsEntityDead(ped)
+
+            if dead and not isDown then
+                EnterKampfunfaehig()
+            elseif not dead and isDown then
+                ExitKampfunfaehig()
+            end
+
+            if isDown and canSelfRespawn and Config.Kampfunfaehig.OnTimeoutAction == "allow_self_respawn" then
+                MC_NotifyHelp("Drücke ~INPUT_CONTEXT~, um dich selbst wiederzubeleben")
+
+                if IsControlJustReleased(0, Config.Kampfunfaehig.SelfRespawnKey) then
+                    TriggerServerEvent('mc_core:kampfunfaehig:autoRespawn')
+                end
+            end
+
+            Wait(500)
         end
     end)
 end
@@ -2231,4 +2446,2123 @@ do
             end)
         end
     end)
+end
+
+-- ============================================================
+-- MODUL: CarryPeople - CLIENT
+-- ============================================================
+-- Ersetzt das vorherige selbstgebaute Carry-System. Übernommen aus
+-- dem eigenständigen "CarryPeople"-Script von Robbster. Über
+-- Config.CarryPeople.enabled an/aus schaltbar. Helper-Funktionen
+-- mit "CP_" Präfix, da PiggyBack/TakeHostage (weiter unten) mit
+-- identisch benannten lokalen Helpern arbeiten.
+-- ============================================================
+
+local carryPeopleState = {
+    InProgress = false,
+    targetSrc = -1,
+    type = "",
+    personCarrying = {
+        animDict = "missfinale_c2mcs_1",
+        anim = "fin_c2_mcs_1_camman",
+        flag = 49,
+    },
+    personCarried = {
+        animDict = "nm",
+        anim = "firemans_carry",
+        attachX = 0.27,
+        attachY = 0.15,
+        attachZ = 0.63,
+        flag = 33,
+    }
+}
+
+local function CP_Notify(text)
+    SetTextComponentFormat("STRING")
+    AddTextComponentString(text)
+    DisplayHelpTextFromStringLabel(0, 0, 1, -1)
+end
+
+local function CP_GetClosestPlayer(radius)
+    local players = GetActivePlayers()
+    local closestDistance = -1
+    local closestPlayer = -1
+    local playerPed = PlayerPedId()
+    local playerCoords = GetEntityCoords(playerPed)
+
+    for _, playerId in ipairs(players) do
+        local targetPed = GetPlayerPed(playerId)
+        if targetPed ~= playerPed then
+            local targetCoords = GetEntityCoords(targetPed)
+            local distance = #(targetCoords - playerCoords)
+            if closestDistance == -1 or closestDistance > distance then
+                closestPlayer = playerId
+                closestDistance = distance
+            end
+        end
+    end
+    if closestDistance ~= -1 and closestDistance <= radius then
+        return closestPlayer
+    else
+        return nil
+    end
+end
+
+local function CP_EnsureAnimDict(animDict)
+    if not HasAnimDictLoaded(animDict) then
+        RequestAnimDict(animDict)
+        while not HasAnimDictLoaded(animDict) do
+            Wait(0)
+        end
+    end
+    return animDict
+end
+
+RegisterCommand(Config.CarryPeople.command, function(source, args)
+    if not Config.CarryPeople.enabled then return end
+
+    if not carryPeopleState.InProgress then
+        local closestPlayer = CP_GetClosestPlayer(Config.CarryPeople.maxDistance)
+        if closestPlayer then
+            local targetSrc = GetPlayerServerId(closestPlayer)
+            if targetSrc ~= -1 then
+                carryPeopleState.InProgress = true
+                carryPeopleState.targetSrc = targetSrc
+                TriggerServerEvent("CarryPeople:sync", targetSrc)
+                CP_EnsureAnimDict(carryPeopleState.personCarrying.animDict)
+                carryPeopleState.type = "carrying"
+            else
+                CP_Notify("~r~Niemand in der Nähe zum Tragen!")
+            end
+        else
+            CP_Notify("~r~Niemand in der Nähe zum Tragen!")
+        end
+    else
+        carryPeopleState.InProgress = false
+        ClearPedSecondaryTask(PlayerPedId())
+        DetachEntity(PlayerPedId(), true, false)
+        TriggerServerEvent("CarryPeople:stop", carryPeopleState.targetSrc)
+        carryPeopleState.targetSrc = 0
+    end
+end, false)
+
+RegisterNetEvent("CarryPeople:syncTarget")
+AddEventHandler("CarryPeople:syncTarget", function(targetSrc)
+    local targetPed = GetPlayerPed(GetPlayerFromServerId(targetSrc))
+    carryPeopleState.InProgress = true
+    CP_EnsureAnimDict(carryPeopleState.personCarried.animDict)
+    AttachEntityToEntity(PlayerPedId(), targetPed, 0, carryPeopleState.personCarried.attachX, carryPeopleState.personCarried.attachY, carryPeopleState.personCarried.attachZ, 0.5, 0.5, 180, false, false, false, false, 2, false)
+    carryPeopleState.type = "beingcarried"
+end)
+
+RegisterNetEvent("CarryPeople:cl_stop")
+AddEventHandler("CarryPeople:cl_stop", function()
+    carryPeopleState.InProgress = false
+    ClearPedSecondaryTask(PlayerPedId())
+    DetachEntity(PlayerPedId(), true, false)
+end)
+
+CreateThread(function()
+    while true do
+        if carryPeopleState.InProgress then
+            if carryPeopleState.type == "beingcarried" then
+                if not IsEntityPlayingAnim(PlayerPedId(), carryPeopleState.personCarried.animDict, carryPeopleState.personCarried.anim, 3) then
+                    TaskPlayAnim(PlayerPedId(), carryPeopleState.personCarried.animDict, carryPeopleState.personCarried.anim, 8.0, -8.0, 100000, carryPeopleState.personCarried.flag, 0, false, false, false)
+                end
+            elseif carryPeopleState.type == "carrying" then
+                if not IsEntityPlayingAnim(PlayerPedId(), carryPeopleState.personCarrying.animDict, carryPeopleState.personCarrying.anim, 3) then
+                    TaskPlayAnim(PlayerPedId(), carryPeopleState.personCarrying.animDict, carryPeopleState.personCarrying.anim, 8.0, -8.0, 100000, carryPeopleState.personCarrying.flag, 0, false, false, false)
+                end
+            end
+        end
+        Wait(0)
+    end
+end)
+
+-- ============================================================
+-- MODUL: Jail (esx_jail) - CLIENT
+-- ============================================================
+-- Übernommen aus dem eigenständigen "esx_jail"-Script.
+-- Config.Locale wurde zu Config.JailLocale umbenannt (Konflikt mit
+-- mc_core's Config.Locale = 'de', siehe config.lua).
+-- ============================================================
+
+ESX = ESX or exports['es_extended']:getSharedObject() -- geteiltes ESX-Objekt (siehe server.lua-Muster), keine erneute Belegung nötig
+
+local isJailed = false
+local currentJailId = nil
+local remainingTime = 0
+local currentReason = nil
+local escapeThreadActive = false
+
+-- ####################################################
+-- ##                   HELPERS                       ##
+-- ####################################################
+
+local function Notify(msg, type)
+    lib.notify({ description = msg, type = type or 'inform' })
+end
+
+local function GetJobName()
+    local xPlayer = ESX.GetPlayerData()
+    return xPlayer.job and xPlayer.job.name or nil
+end
+
+RegisterNetEvent('esx_jail:notify', function(msg, type)
+    Notify(msg, type)
+end)
+
+-- ####################################################
+-- ##          BEIM SPAWNEN PRÜFEN OB INHAFTIERT      ##
+-- ####################################################
+
+AddEventHandler('esx:playerLoaded', function()
+    ESX.TriggerServerCallback('esx_jail:checkOnLoad', function(data)
+        if data then
+            if data.type == 'admin' then
+                SendToAdminJail(data.time, data.reason)
+            else
+                SendToJail(data.jailId, data.time, data.reason)
+            end
+        end
+    end)
+end)
+
+-- ####################################################
+-- ##                 INS GEFÄNGNIS                   ##
+-- ####################################################
+
+RegisterNetEvent('esx_jail:sendToJail', function(jailId, minutes, reason, location)
+    SendToJail(jailId, minutes, reason, location)
+end)
+
+function SendToJail(jailId, minutes, reason, location)
+    local jail = Config.Jails[jailId]
+    if not jail then return end
+
+    isJailed = true
+    currentJailId = jailId
+    remainingTime = minutes
+    currentReason = reason or 'Kein Grund angegeben'
+
+    -- location = 'yard' -> im Hof spawnen (falls konfiguriert), sonst normale Zelle
+    local spawnPool = jail.cellSpawns
+    if location == 'yard' and jail.yardSpawns and #jail.yardSpawns > 0 then
+        spawnPool = jail.yardSpawns
+    end
+    local spawn = spawnPool[math.random(#spawnPool)]
+    local ped = PlayerPedId()
+
+    DoScreenFadeOut(500)
+    Wait(600)
+    SetEntityCoords(ped, spawn.x, spawn.y, spawn.z)
+    SetEntityHeading(ped, spawn.w)
+    DoScreenFadeIn(500)
+
+    ApplyPrisonClothes()
+
+    Notify(Config.JailLocale.arrested:format(minutes, jail.label), 'error')
+    StartEscapeWatch()
+end
+
+-- ####################################################
+-- ##          ADMIN-JAIL (fixer Ort, kein jailId)     ##
+-- ####################################################
+-- Eigenständige Variante für /adminjail und /putinjail: kein Gefängnis aus
+-- Config.Jails, sondern immer Config.AdminJail.Position. Escape-Alarm/Arbeiten/
+-- Gym/Essen greifen hier bewusst nicht, da currentJailId dabei nil bleibt.
+
+RegisterNetEvent('esx_jail:sendToAdminJail', function(minutes, reason)
+    SendToAdminJail(minutes, reason)
+end)
+
+function SendToAdminJail(minutes, reason)
+    isJailed = true
+    currentJailId = nil
+    remainingTime = minutes
+    currentReason = reason or 'Kein Grund angegeben'
+
+    local pos = Config.AdminJail.Position
+    local ped = PlayerPedId()
+
+    DoScreenFadeOut(500)
+    Wait(600)
+    SetEntityCoords(ped, pos.x, pos.y, pos.z)
+    DoScreenFadeIn(500)
+
+    ApplyPrisonClothes()
+
+    Notify(Config.JailLocale.arrested:format(minutes, 'Admin-Jail'), 'error')
+end
+
+RegisterNetEvent('esx_jail:releaseFromAdminJail', function(returnCoords)
+    isJailed = false
+    currentJailId = nil
+    remainingTime = 0
+    currentReason = nil
+    lib.hideTextUI()
+
+    if returnCoords and returnCoords.x then
+        local ped = PlayerPedId()
+        DoScreenFadeOut(500)
+        Wait(600)
+        SetEntityCoords(ped, returnCoords.x, returnCoords.y, returnCoords.z)
+        if returnCoords.h then
+            SetEntityHeading(ped, returnCoords.h)
+        end
+        DoScreenFadeIn(500)
+    end
+
+    RestorePlayerClothes(nil)
+    Notify(Config.JailLocale.released, 'success')
+end)
+
+RegisterNetEvent('esx_jail:updateAdminTimeDisplay', function(minutes)
+    remainingTime = minutes
+end)
+
+-- ####################################################
+-- ##                  ENTLASSEN                      ##
+-- ####################################################
+
+RegisterNetEvent('esx_jail:releaseFromJail', function(jailId, originalSkin)
+    local jail = Config.Jails[jailId]
+    isJailed = false
+    currentJailId = nil
+    remainingTime = 0
+    currentReason = nil
+    lib.hideTextUI() -- sofort ausblenden, nicht erst auf den nächsten Thread-Tick warten
+
+    if jail then
+        local ped = PlayerPedId()
+        DoScreenFadeOut(500)
+        Wait(600)
+        SetEntityCoords(ped, jail.releaseCoords.x, jail.releaseCoords.y, jail.releaseCoords.z)
+        SetEntityHeading(ped, jail.releaseCoords.w)
+        DoScreenFadeIn(500)
+    end
+
+    RestorePlayerClothes(originalSkin)
+    Notify(Config.JailLocale.released, 'success')
+end)
+
+RegisterNetEvent('esx_jail:updateTimeDisplay', function(minutes)
+    remainingTime = minutes
+end)
+
+-- ####################################################
+-- ##              STRÄFLINGS-KLEIDUNG                ##
+-- ####################################################
+-- Wichtig: die Original-Kleidung wird VOR dem Umziehen gesichert und an den
+-- Server geschickt (jail_storage), damit sie auch nach Reconnect/Serverrestart
+-- korrekt wiederhergestellt werden kann. Vorher wurde beim "Wiederherstellen"
+-- versehentlich nur die aktuelle (=Gefängnis-)Kleidung erneut geladen.
+
+function ApplyPrisonClothes()
+    if not Config.PrisonClothes.enabled then return end
+    local xPlayer = ESX.GetPlayerData()
+    local skinSet = xPlayer.sex == 0 and Config.PrisonClothes.male or Config.PrisonClothes.female
+
+    TriggerEvent('skinchanger:getSkin', function(currentSkin)
+        -- Original-Skin sichern, BEVOR er überschrieben wird
+        TriggerServerEvent('esx_jail:saveOriginalSkin', currentSkin)
+
+        local prisonSkin = {}
+        for k, v in pairs(currentSkin) do prisonSkin[k] = v end
+        for k, v in pairs(skinSet) do prisonSkin[k] = v end
+
+        -- Nur visuell laden, NICHT registrieren/speichern, damit die
+        -- Gefängniskleidung nie in der echten Skin-Datenbank landet
+        TriggerEvent('skinchanger:loadSkin', prisonSkin)
+    end)
+end
+
+function RestorePlayerClothes(originalSkin)
+    if not Config.PrisonClothes.enabled then return end
+
+    if originalSkin then
+        TriggerEvent('skinchanger:loadSkin', originalSkin)
+        TriggerEvent('esx_skin:playerRegisterSkin', originalSkin)
+    else
+        -- Fallback falls kein Original-Skin übermittelt wurde: aus der
+        -- persistierten Skin-Datenbank neu laden (nicht die aktuelle Optik nehmen!)
+        TriggerEvent('esx_skin:setDefaultModel')
+        TriggerEvent('skinchanger:getSkin', function(savedSkin)
+            TriggerEvent('skinchanger:loadSkin', savedSkin)
+        end)
+    end
+end
+
+-- ####################################################
+-- ##               HUD - RESTSTRAFE                  ##
+-- ####################################################
+
+CreateThread(function()
+    local lastText = nil
+    while true do
+        Wait(0)
+        if isJailed then
+            local text = ('Inhaftiert - Reststrafe: %s Minute(n)\nGrund: %s'):format(remainingTime, currentReason or '-')
+            if text ~= lastText then
+                lib.showTextUI(text, {
+                    position = 'top-center',
+                    icon = 'handcuffs'
+                })
+                lastText = text
+            end
+        else
+            if lastText ~= nil then
+                lib.hideTextUI()
+                lastText = nil
+            end
+            Wait(500)
+        end
+    end
+end)
+
+-- ####################################################
+-- ##                FLUCHT-ERKENNUNG                 ##
+-- ####################################################
+
+function StartEscapeWatch()
+    if escapeThreadActive or not Config.Escape.enabled then return end
+    escapeThreadActive = true
+
+    CreateThread(function()
+        while isJailed do
+            Wait(2000)
+            local jail = Config.Jails[currentJailId]
+            if jail then
+                local coords = GetEntityCoords(PlayerPedId())
+                local dist = #(coords - jail.zone.center)
+                if dist > jail.zone.radius then
+                    if Config.Escape.preventEscape then
+                        local spawn = jail.cellSpawns[1]
+                        SetEntityCoords(PlayerPedId(), spawn.x, spawn.y, spawn.z)
+                        Notify('Du kannst nicht fliehen!', 'error')
+                    else
+                        TriggerServerEvent('esx_jail:escapeAttempt', currentJailId)
+                        TriggerServerEvent('esx_jail:escapeCoords', currentJailId, coords)
+                    end
+                end
+            end
+        end
+        escapeThreadActive = false
+    end)
+end
+
+RegisterNetEvent('esx_jail:escapeAlert', function(jailLabel, inmateName)
+    Notify(Config.JailLocale.escape_alert:format(jailLabel), 'error')
+    PlaySoundFrontend(-1, 'Lose_1st', 'GTAO_FM_Events_Soundset', true)
+end)
+
+-- ####################################################
+-- ##       AUSBRUCH PER MINISPIEL (/ausbrechen)      ##
+-- ####################################################
+-- Gilt bewusst NUR fürs normale Jail (currentJailId muss gesetzt sein) -
+-- bei /adminjail bleibt currentJailId nil, der Befehl greift dort also
+-- gar nicht erst (AdminJail soll unverändert bleiben).
+local lastEscapeMinigameAttempt = 0
+
+RegisterCommand(Config.Escape.minigame.command, function()
+    if not Config.Escape.enabled or not Config.Escape.minigame.enabled then return end
+
+    if not isJailed or not currentJailId then
+        Notify('Du kannst hier nicht so ausbrechen.', 'error')
+        return
+    end
+
+    local now = GetGameTimer()
+    local cooldownMs = (Config.Escape.minigame.cooldown or 120) * 1000
+    if now - lastEscapeMinigameAttempt < cooldownMs then
+        local waitLeft = math.ceil((cooldownMs - (now - lastEscapeMinigameAttempt)) / 1000)
+        Notify(('Warte noch %d Sekunden, bevor du es erneut versuchst.'):format(waitLeft), 'error')
+        return
+    end
+    lastEscapeMinigameAttempt = now
+
+    local success = lib.skillCheck(Config.Escape.minigame.difficulty)
+
+    if success then
+        TriggerServerEvent('esx_jail:escapeMinigameSuccess', currentJailId)
+    else
+        Notify('Ausbruch fehlgeschlagen!', 'error')
+        TriggerServerEvent('esx_jail:escapeMinigameFail', currentJailId)
+    end
+end, false)
+
+RegisterNetEvent('esx_jail:escapeBlip', function(coords)
+    local blip = AddBlipForCoord(coords.x, coords.y, coords.z)
+    SetBlipSprite(blip, Config.Escape.blipSprite)
+    SetBlipColour(blip, Config.Escape.blipColor)
+    SetBlipFlashes(blip, true)
+    BeginTextCommandSetBlipName('STRING')
+    AddTextComponentString('Flüchtiger Insasse')
+    EndTextCommandSetBlipName(blip)
+    SetTimeout(60000, function()
+        RemoveBlip(blip)
+    end)
+end)
+
+-- ####################################################
+-- ##                    ARBEITEN                     ##
+-- ####################################################
+
+CreateThread(function()
+    for jailId, jail in pairs(Config.Jails) do
+        for i, work in ipairs(jail.workPoints) do
+            lib.zones.sphere({
+                coords = work.coords,
+                radius = 1.5,
+                debug = false,
+                onEnter = function()
+                    if isJailed and currentJailId == jailId then
+                        lib.showTextUI('[E] ' .. work.label)
+                    end
+                end,
+                onExit = function()
+                    lib.hideTextUI()
+                end,
+                inside = function()
+                    if isJailed and currentJailId == jailId and IsControlJustReleased(0, 38) then -- E
+                        lib.hideTextUI()
+                        if lib.progressCircle({
+                            duration = work.duration,
+                            label = work.label,
+                            useWhileDead = false,
+                            canCancel = true,
+                            disable = { move = true, car = true, combat = true },
+                            anim = { dict = 'mini@repair', clip = 'fixing_a_ped' },
+                        }) then
+                            TriggerServerEvent('esx_jail:workComplete', i, jailId)
+                        end
+                    end
+                end
+            })
+        end
+    end
+end)
+
+-- ####################################################
+-- ##                     GYM                         ##
+-- ####################################################
+
+local gymCooldown = 0
+
+CreateThread(function()
+    if not Config.Gym.enabled then return end
+    for jailId, jail in pairs(Config.Jails) do
+        for _, coords in ipairs(jail.gymPoints) do
+            lib.zones.sphere({
+                coords = coords,
+                radius = 1.5,
+                onEnter = function()
+                    if isJailed and currentJailId == jailId then
+                        lib.showTextUI('[E] Trainieren')
+                    end
+                end,
+                onExit = function()
+                    lib.hideTextUI()
+                end,
+                inside = function()
+                    if isJailed and currentJailId == jailId and IsControlJustReleased(0, 38) then
+                        if GetGameTimer() < gymCooldown then
+                            Notify('Du bist noch erschöpft.', 'error')
+                            return
+                        end
+                        lib.hideTextUI()
+                        local ped = PlayerPedId()
+                        RequestAnimDict(Config.Gym.animDict)
+                        while not HasAnimDictLoaded(Config.Gym.animDict) do Wait(10) end
+                        TaskPlayAnim(ped, Config.Gym.animDict, Config.Gym.anim, 8.0, -8.0, Config.Gym.duration, 1, 0, false, false, false)
+                        lib.progressBar({
+                            duration = Config.Gym.duration,
+                            label = 'Training...',
+                            canCancel = false,
+                        })
+                        ClearPedTasks(ped)
+                        gymCooldown = GetGameTimer() + (Config.Gym.cooldown * 1000)
+                        Notify('Du fühlst dich fitter.', 'success')
+                    end
+                end
+            })
+        end
+    end
+end)
+
+-- ####################################################
+-- ##               ESSEN / TRINKEN                   ##
+-- ####################################################
+
+RegisterCommand('givefood', function()
+    if not Config.Food.enabled then return end
+    local jobName = GetJobName()
+    if not jobName then return end
+
+    local closestPlayer, closestDistance = ESX.Game.GetClosestPlayer()
+    if closestPlayer == -1 or closestDistance > Config.Food.interactDistance then
+        Notify(Config.JailLocale.player_not_found, 'error')
+        return
+    end
+
+    local targetServerId = GetPlayerServerId(closestPlayer)
+
+    local options = {}
+    for _, itemCfg in ipairs(Config.Food.items) do
+        options[#options + 1] = {
+            title = itemCfg.label,
+            onSelect = function()
+                TriggerServerEvent('esx_jail:giveFood', targetServerId, itemCfg)
+            end
+        }
+    end
+
+    lib.registerContext({ id = 'jail_food_menu', title = 'Insassen versorgen', options = options })
+    lib.showContext('jail_food_menu')
+end)
+
+RegisterNetEvent('esx_jail:consumeFood', function(itemConfig)
+    if itemConfig.hunger then
+        TriggerEvent('esx_status:add', 'hunger', itemConfig.hunger)
+    end
+    if itemConfig.thirst then
+        TriggerEvent('esx_status:add', 'thirst', itemConfig.thirst)
+    end
+    Notify('Du hast etwas bekommen.', 'success')
+end)
+
+-- ####################################################
+-- ##                  BESTECHUNG                     ##
+-- ####################################################
+
+RegisterCommand('bribe', function()
+    if not isJailed or not Config.Bribe.enabled then return end
+
+    local ped = PlayerPedId()
+    local coords = GetEntityCoords(ped)
+    local nearbyGuards = {}
+
+    for _, playerId in ipairs(GetActivePlayers()) do
+        local targetPed = GetPlayerPed(playerId)
+        if targetPed ~= ped then
+            local dist = #(coords - GetEntityCoords(targetPed))
+            if dist <= Config.Bribe.guardDistance then
+                nearbyGuards[#nearbyGuards + 1] = GetPlayerServerId(playerId)
+            end
+        end
+    end
+
+    local confirmed = lib.alertDialog({
+        header = 'Bestechung',
+        content = ('Möchtest du versuchen den Wächter für $%s zu bestechen?'):format(Config.Bribe.cost),
+        centered = true,
+        cancel = true
+    })
+
+    if confirmed == 'confirm' then
+        TriggerServerEvent('esx_jail:bribeAttempt', nearbyGuards)
+    end
+end)
+
+-- ####################################################
+-- ##            VERHAFTEN (POLIZEI-SEITE)            ##
+-- ####################################################
+
+RegisterCommand('arrest', function()
+    local jobName = GetJobName()
+    if not jobName then return end
+
+    local isAllowed = false
+    for _, job in ipairs(Config.ArrestJobs) do
+        if jobName == job then isAllowed = true end
+    end
+    if not isAllowed then
+        Notify(Config.JailLocale.not_allowed_job, 'error')
+        return
+    end
+
+    local closestPlayer, closestDistance = ESX.Game.GetClosestPlayer()
+    if closestPlayer == -1 or closestDistance > Config.ArrestDistance then
+        Notify(Config.JailLocale.player_not_found, 'error')
+        return
+    end
+
+    local targetServerId = GetPlayerServerId(closestPlayer)
+
+    local jailOptions = {}
+    for jailId, jail in pairs(Config.Jails) do
+        jailOptions[#jailOptions + 1] = { value = jailId, label = jail.label }
+    end
+
+    local input = lib.inputDialog('Spieler verhaften', {
+        { type = 'select', label = 'Gefängnis', options = jailOptions, required = true },
+        { type = 'number', label = 'Dauer (Minuten)', required = true, min = 1, default = 10 },
+        { type = 'input', label = 'Grund', required = true },
+    })
+
+    if not input then return end
+
+    TriggerServerEvent('esx_jail:arrestPlayer', targetServerId, tonumber(input[1]), tonumber(input[2]), input[3])
+end, false)
+
+-- ####################################################
+-- ##                GEFÄNGNIS-BLIPS                  ##
+-- ####################################################
+
+CreateThread(function()
+    for jailId, jail in pairs(Config.Jails) do
+        local blip = AddBlipForCoord(jail.managementPed.coords.x, jail.managementPed.coords.y, jail.managementPed.coords.z)
+        SetBlipSprite(blip, 141)
+        SetBlipDisplay(blip, 4)
+        SetBlipScale(blip, 0.8)
+        SetBlipColour(blip, 3)
+        SetBlipAsShortRange(blip, true)
+        BeginTextCommandSetBlipName('STRING')
+        AddTextComponentString(jail.label)
+        EndTextCommandSetBlipName(blip)
+    end
+end)
+
+-- ####################################################
+-- ##             VERWALTUNGS-MENÜ (PED)               ##
+-- ####################################################
+
+
+local spawnedPeds = {}
+
+CreateThread(function()
+    for jailId, jail in pairs(Config.Jails) do
+        local modelHash = jail.managementPed.model
+
+        if not IsModelValid(modelHash) then
+            print(('[esx_jail] WARNUNG: Ped-Modell "%s" für Gefängnis "%s" ist ungültig! Ped wird übersprungen.'):format(modelHash, jail.label))
+            goto continue
+        end
+
+        RequestModel(modelHash)
+        local timeout = GetGameTimer() + 5000
+        while not HasModelLoaded(modelHash) do
+            Wait(10)
+            if GetGameTimer() > timeout then
+                print(('[esx_jail] WARNUNG: Ped-Modell "%s" für Gefängnis "%s" konnte nicht geladen werden (Timeout).'):format(modelHash, jail.label))
+                goto continue
+            end
+        end
+
+        local c = jail.managementPed.coords
+        local ped = CreatePed(4, modelHash, c.x, c.y, c.z - 1.0, c.w, false, true)
+        FreezeEntityPosition(ped, true)
+        SetEntityInvincible(ped, true)
+        SetBlockingOfNonTemporaryEvents(ped, true)
+        TaskStartScenarioInPlace(ped, 'WORLD_HUMAN_GUARD_STAND', 0, true)
+        spawnedPeds[#spawnedPeds + 1] = ped
+
+        -- Native Interaktion statt ox_target: einfach in die Nähe gehen und [E] drücken
+        local zoneCoords = vector3(c.x, c.y, c.z)
+        lib.zones.sphere({
+            coords = zoneCoords,
+            radius = 1.5,
+            onEnter = function()
+                lib.showTextUI('[E] Gefängnis verwalten')
+            end,
+            onExit = function()
+                lib.hideTextUI()
+            end,
+            inside = function()
+                if IsControlJustReleased(0, 38) then -- E
+                    lib.hideTextUI()
+                    OpenManagementMenu(jailId)
+                end
+            end
+        })
+
+        ::continue::
+    end
+end)
+
+function OpenManagementMenu(jailId)
+    local jail = Config.Jails[jailId]
+
+    -- Eigenständiges Menü des jeweiligen Gefängnisses: keine Vermischung mehr mit
+    -- dem Admin-Jail-System (/adminjail) - das bleibt komplett separat.
+    local options = {
+        {
+            title = 'Insassen anzeigen',
+            icon = 'user-group',
+            onSelect = function() OpenInmatesMenu(jailId) end
+        },
+        {
+            title = 'Protokoll anzeigen',
+            icon = 'clipboard-list',
+            onSelect = function() OpenLogMenu(jailId, 0) end
+        },
+        {
+            title = 'Spieler einsperren',
+            icon = 'user-lock',
+            onSelect = function() OpenJailPlayerMenu(jailId, 'jail_main_menu') end
+        },
+    }
+
+    lib.registerContext({
+        id = 'jail_main_menu',
+        title = jail.label,
+        options = options
+    })
+    lib.showContext('jail_main_menu')
+end
+
+-- Sperrt einen Spieler direkt über das Verwaltungsmenü DIESES Gefängnisses ein.
+-- Im Gegensatz zu /arrest (Nähe-Check) und dem Admin-Jail (fixer Ort) kann hier
+-- gewählt werden, ob der Insasse in einer Zelle oder im Hof landet.
+function OpenJailPlayerMenu(jailId, parentMenu)
+    parentMenu = parentMenu or 'jail_main_menu'
+    local jail = Config.Jails[jailId]
+
+    ESX.TriggerServerCallback('esx_jail:getOnlinePlayers', function(players)
+        local options = {}
+        for _, p in ipairs(players) do
+            options[#options + 1] = {
+                -- Nur der Name wird angezeigt (keine ID mehr) - Wunsch: "nur Spieler-Name
+                -- in der Liste". AdminJail-Menü (weiter unten) bleibt bewusst unverändert.
+                title = p.name,
+                icon = 'user',
+                onSelect = function()
+                    local locationOptions = {
+                        { value = 'cell', label = 'Zelle' },
+                        { value = 'yard', label = 'Hof' },
+                    }
+
+                    local input = lib.inputDialog(('%s einsperren'):format(p.name), {
+                        { type = 'select', label = 'Ort', options = locationOptions, required = true, default = 'cell' },
+                        { type = 'number', label = 'Dauer (Minuten)', required = true, min = 1, default = 10 },
+                        { type = 'input', label = 'Grund', required = true },
+                    })
+                    if not input then return end
+
+                    local location = input[1]
+                    local minutes = tonumber(input[2])
+                    local reason = input[3]
+
+                    TriggerServerEvent('esx_jail:jailPlayerFromMenu', p.id, jailId, location, minutes, reason)
+                end
+            }
+        end
+        if #options == 0 then
+            options[1] = { title = 'Keine Spieler online', disabled = true }
+        end
+
+        lib.registerContext({
+            id = 'jail_player_menu_' .. jailId,
+            title = 'Spieler einsperren - ' .. jail.label,
+            menu = parentMenu,
+            options = options
+        })
+        lib.showContext('jail_player_menu_' .. jailId)
+    end)
+end
+
+function OpenInmatesMenu(jailId)
+    ESX.TriggerServerCallback('esx_jail:getInmates', function(inmates)
+        local options = {}
+        for _, inmate in ipairs(inmates) do
+            options[#options + 1] = {
+                title = inmate.name,
+                description = ('Reststrafe: %s Minute(n) | %s'):format(inmate.time, inmate.online and 'Online' or 'Offline'),
+                icon = 'user',
+                onSelect = function() OpenInmateActionsMenu(jailId, inmate) end
+            }
+        end
+        if #options == 0 then
+            options[1] = { title = 'Keine Insassen', disabled = true }
+        end
+
+        lib.registerContext({
+            id = 'jail_inmates_menu',
+            title = 'Insassen - ' .. Config.Jails[jailId].label,
+            menu = 'jail_main_menu',
+            options = options
+        })
+        lib.showContext('jail_inmates_menu')
+    end, jailId)
+end
+
+function OpenInmateActionsMenu(jailId, inmate)
+    lib.registerContext({
+        id = 'jail_inmate_actions',
+        title = inmate.name,
+        menu = 'jail_inmates_menu',
+        options = {
+            {
+                title = 'Reststrafe ändern',
+                icon = 'clock',
+                onSelect = function()
+                    local input = lib.inputDialog('Reststrafe ändern', {
+                        { type = 'number', label = 'Minuten', default = inmate.time, required = true, min = 0 }
+                    })
+                    if input then
+                        TriggerServerEvent('esx_jail:updateTime', inmate.identifier, tonumber(input[1]))
+                    end
+                end
+            },
+            {
+                title = 'Entlassen',
+                icon = 'door-open',
+                onSelect = function()
+                    local confirmed = lib.alertDialog({
+                        header = 'Insasse entlassen',
+                        content = ('Möchtest du %s wirklich entlassen?'):format(inmate.name),
+                        cancel = true
+                    })
+                    if confirmed == 'confirm' then
+                        TriggerServerEvent('esx_jail:releaseByOfficer', inmate.identifier)
+                    end
+                end
+            }
+        }
+    })
+    lib.showContext('jail_inmate_actions')
+end
+
+function OpenLogMenu(jailId, page)
+    ESX.TriggerServerCallback('esx_jail:getLog', function(logs)
+        local options = {}
+        for _, entry in ipairs(logs) do
+            options[#options + 1] = {
+                title = ('%s - %s'):format(entry.name, entry.action),
+                description = ('%s | %s'):format(entry.details, entry.created_at),
+            }
+        end
+        if #options == 0 then
+            options[1] = { title = 'Keine Einträge', disabled = true }
+        end
+
+        lib.registerContext({
+            id = 'jail_log_menu',
+            title = 'Protokoll - ' .. Config.Jails[jailId].label,
+            menu = 'jail_main_menu',
+            options = options
+        })
+        lib.showContext('jail_log_menu')
+    end, jailId, page)
+end
+
+-- ####################################################
+-- ##                 ADMIN-MENÜ                      ##
+-- ####################################################
+-- /adminjail ist wieder ein eigenständiges Menü (nur "Spieler einsperren" /
+-- "Insassen verwalten"), unabhängig vom Ped-Menü. Beim Einsperren gibt es keine
+-- Gefängnis-Auswahl mehr - der Spieler wird immer zu Config.AdminJail.Position
+-- teleportiert und bei Entlassung/Ablauf an seine ursprüngliche Position zurück.
+
+if Config.AdminJail.enabled then
+    RegisterCommand(Config.AdminJail.menuCommand, function()
+        ESX.TriggerServerCallback('esx_jail:isAdmin', function(isAdmin)
+            if not isAdmin then
+                Notify('Keine Berechtigung.', 'error')
+                return
+            end
+
+            lib.registerContext({
+                id = 'jail_admin_menu',
+                title = 'Jail - Admin',
+                options = {
+                    {
+                        title = 'Spieler einsperren',
+                        icon = 'user-lock',
+                        onSelect = function() OpenAdminJailPlayerMenu() end
+                    },
+                    {
+                        title = 'Insassen verwalten',
+                        icon = 'people-group',
+                        onSelect = function() OpenAdminInmatesMenu() end
+                    }
+                }
+            })
+            lib.showContext('jail_admin_menu')
+        end)
+    end, false)
+end
+
+-- Baut die Dauer-Optionen (inkl. Presets aus Config.AdminJail) für die Eingabemaske
+local function BuildAdminDurationOptions()
+    local durationOptions = {}
+    for _, minutes in ipairs(Config.AdminJail.durationPresets or {}) do
+        durationOptions[#durationOptions + 1] = { value = minutes, label = ('%s Minuten'):format(minutes) }
+    end
+    if Config.AdminJail.allowCustomDuration then
+        durationOptions[#durationOptions + 1] = { value = 'custom', label = 'Eigene Eingabe...' }
+    end
+    return durationOptions
+end
+
+function OpenAdminJailPlayerMenu(parentMenu)
+    parentMenu = parentMenu or 'jail_admin_menu'
+    ESX.TriggerServerCallback('esx_jail:adminGetPlayers', function(players)
+        local options = {}
+        for _, p in ipairs(players) do
+            options[#options + 1] = {
+                title = ('[%s] %s'):format(p.id, p.name),
+                icon = 'user',
+                onSelect = function()
+                    local durationOptions = BuildAdminDurationOptions()
+
+                    local input = lib.inputDialog(('%s einsperren'):format(p.name), {
+                        { type = 'select', label = 'Dauer', options = durationOptions, required = true },
+                        { type = 'input', label = 'Grund', required = false },
+                    })
+                    if not input then return end
+
+                    local duration = input[1]
+                    local reason = input[2] or ''
+
+                    if duration == 'custom' then
+                        local customInput = lib.inputDialog('Eigene Dauer', {
+                            { type = 'number', label = 'Dauer (Minuten)', required = true, min = 1, default = 10 }
+                        })
+                        if not customInput then return end
+                        duration = tonumber(customInput[1])
+                    else
+                        duration = tonumber(duration)
+                    end
+
+                    TriggerServerEvent('esx_jail:adminJailPlayer', p.id, duration, reason)
+                end
+            }
+        end
+        if #options == 0 then
+            options[1] = { title = 'Keine Spieler online', disabled = true }
+        end
+
+        lib.registerContext({
+            id = 'jail_admin_player_menu',
+            title = 'Spieler auswählen',
+            menu = parentMenu,
+            options = options
+        })
+        lib.showContext('jail_admin_player_menu')
+    end)
+end
+
+function OpenAdminInmatesMenu(parentMenu)
+    parentMenu = parentMenu or 'jail_admin_menu'
+    ESX.TriggerServerCallback('esx_jail:adminGetAllInmates', function(inmates)
+        local options = {}
+        for _, inmate in ipairs(inmates) do
+            options[#options + 1] = {
+                title = inmate.name,
+                description = ('Reststrafe: %s Minute(n) | %s'):format(inmate.time, inmate.online and 'Online' or 'Offline'),
+                icon = 'user',
+                onSelect = function() OpenAdminInmateActionsMenu(inmate) end
+            }
+        end
+        if #options == 0 then
+            options[1] = { title = 'Keine Insassen', disabled = true }
+        end
+
+        lib.registerContext({
+            id = 'jail_admin_inmates_menu',
+            title = 'Insassen',
+            menu = parentMenu,
+            options = options
+        })
+        lib.showContext('jail_admin_inmates_menu')
+    end)
+end
+
+function OpenAdminInmateActionsMenu(inmate)
+    lib.registerContext({
+        id = 'jail_admin_inmate_actions',
+        title = inmate.name,
+        menu = 'jail_admin_inmates_menu',
+        options = {
+            {
+                title = 'Reststrafe ändern',
+                icon = 'clock',
+                onSelect = function()
+                    local input = lib.inputDialog('Reststrafe ändern', {
+                        { type = 'number', label = 'Minuten', default = inmate.time, required = true, min = 0 }
+                    })
+                    if input then
+                        TriggerServerEvent('esx_jail:adminUpdateTime', inmate.identifier, tonumber(input[1]))
+                    end
+                end
+            },
+            {
+                title = 'Entlassen',
+                icon = 'door-open',
+                onSelect = function()
+                    local confirmed = lib.alertDialog({
+                        header = 'Insasse entlassen',
+                        content = ('Möchtest du %s wirklich entlassen?'):format(inmate.name),
+                        cancel = true
+                    })
+                    if confirmed == 'confirm' then
+                        TriggerServerEvent('esx_jail:adminRelease', inmate.identifier)
+                    end
+                end
+            }
+        }
+    })
+    lib.showContext('jail_admin_inmate_actions')
+end
+
+-- ####################################################
+-- ##                    CLEANUP                      ##
+-- ####################################################
+
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    for _, ped in ipairs(spawnedPeds) do
+        DeleteEntity(ped)
+    end
+end)
+
+-- ============================================================
+-- MODUL: AntiVDM - CLIENT
+-- ============================================================
+-- Übernommen aus dem eigenständigen "AntiVDM"-Script.
+-- Über Config.AntiVDM.enabled an/aus schaltbar (wird jeden Tick geprüft).
+-- ============================================================
+
+CreateThread(function()
+    while true do
+        Wait(0)
+        if Config.AntiVDM.enabled then
+            for _, hash in ipairs(Config.AntiVDM.weaponHashes) do
+                SetWeaponDamageModifier(hash, Config.AntiVDM.damageModifier)
+            end
+        end
+    end
+end)
+
+-- ============================================================
+-- MODUL: PiggyBack - CLIENT
+-- ============================================================
+-- Übernommen aus dem eigenständigen "PiggyBack"-Script.
+-- Über Config.PiggyBack.enabled an/aus schaltbar.
+-- Hilfsfunktionen wurden mit "PB_" Präfix versehen, da TakeHostage
+-- (ebenfalls unten gemergt) identisch benannte lokale Hilfsfunktionen
+-- mitbringt (drawNativeNotification/GetClosestPlayer/ensureAnimDict).
+-- ============================================================
+
+local piggybackState = {
+    InProgress = false,
+    targetSrc = -1,
+    type = "",
+    personPiggybacking = {
+        animDict = "anim@arena@celeb@flat@paired@no_props@",
+        anim = "piggyback_c_player_a",
+        flag = 49,
+    },
+    personBeingPiggybacked = {
+        animDict = "anim@arena@celeb@flat@paired@no_props@",
+        anim = "piggyback_c_player_b",
+        attachX = 0.0,
+        attachY = -0.07,
+        attachZ = 0.45,
+        flag = 33,
+    }
+}
+
+local function PB_Notify(text)
+    SetTextComponentFormat("STRING")
+    AddTextComponentString(text)
+    DisplayHelpTextFromStringLabel(0, 0, 1, -1)
+end
+
+local function PB_GetClosestPlayer(radius)
+    local players = GetActivePlayers()
+    local closestDistance = -1
+    local closestPlayer = -1
+    local playerPed = PlayerPedId()
+    local playerCoords = GetEntityCoords(playerPed)
+
+    for _, playerId in ipairs(players) do
+        local targetPed = GetPlayerPed(playerId)
+        if targetPed ~= playerPed then
+            local targetCoords = GetEntityCoords(targetPed)
+            local distance = #(targetCoords - playerCoords)
+            if closestDistance == -1 or closestDistance > distance then
+                closestPlayer = playerId
+                closestDistance = distance
+            end
+        end
+    end
+    if closestDistance ~= -1 and closestDistance <= radius then
+        return closestPlayer
+    else
+        return nil
+    end
+end
+
+local function PB_EnsureAnimDict(animDict)
+    if not HasAnimDictLoaded(animDict) then
+        RequestAnimDict(animDict)
+        while not HasAnimDictLoaded(animDict) do
+            Wait(0)
+        end
+    end
+    return animDict
+end
+
+RegisterCommand(Config.PiggyBack.command, function(source, args)
+    if not Config.PiggyBack.enabled then return end
+
+    if not piggybackState.InProgress then
+        local closestPlayer = PB_GetClosestPlayer(Config.PiggyBack.maxDistance)
+        if closestPlayer then
+            local targetSrc = GetPlayerServerId(closestPlayer)
+            if targetSrc ~= -1 then
+                piggybackState.InProgress = true
+                piggybackState.targetSrc = targetSrc
+                TriggerServerEvent("Piggyback:sync", targetSrc)
+                PB_EnsureAnimDict(piggybackState.personPiggybacking.animDict)
+                piggybackState.type = "piggybacking"
+            else
+                PB_Notify("~r~Niemand in der Nähe zum Huckepack-Tragen!")
+            end
+        else
+            PB_Notify("~r~Niemand in der Nähe zum Huckepack-Tragen!")
+        end
+    else
+        piggybackState.InProgress = false
+        ClearPedSecondaryTask(PlayerPedId())
+        DetachEntity(PlayerPedId(), true, false)
+        TriggerServerEvent("Piggyback:stop", piggybackState.targetSrc)
+        piggybackState.targetSrc = 0
+    end
+end, false)
+
+RegisterNetEvent("Piggyback:syncTarget")
+AddEventHandler("Piggyback:syncTarget", function(targetSrc)
+    local targetPed = GetPlayerPed(GetPlayerFromServerId(targetSrc))
+    piggybackState.InProgress = true
+    PB_EnsureAnimDict(piggybackState.personBeingPiggybacked.animDict)
+    AttachEntityToEntity(PlayerPedId(), targetPed, 0, piggybackState.personBeingPiggybacked.attachX, piggybackState.personBeingPiggybacked.attachY, piggybackState.personBeingPiggybacked.attachZ, 0.5, 0.5, 180, false, false, false, false, 2, false)
+    piggybackState.type = "beingPiggybacked"
+end)
+
+RegisterNetEvent("Piggyback:cl_stop")
+AddEventHandler("Piggyback:cl_stop", function()
+    piggybackState.InProgress = false
+    ClearPedSecondaryTask(PlayerPedId())
+    DetachEntity(PlayerPedId(), true, false)
+end)
+
+CreateThread(function()
+    while true do
+        if piggybackState.InProgress then
+            if piggybackState.type == "beingPiggybacked" then
+                if not IsEntityPlayingAnim(PlayerPedId(), piggybackState.personBeingPiggybacked.animDict, piggybackState.personBeingPiggybacked.anim, 3) then
+                    TaskPlayAnim(PlayerPedId(), piggybackState.personBeingPiggybacked.animDict, piggybackState.personBeingPiggybacked.anim, 8.0, -8.0, 100000, piggybackState.personBeingPiggybacked.flag, 0, false, false, false)
+                end
+            elseif piggybackState.type == "piggybacking" then
+                if not IsEntityPlayingAnim(PlayerPedId(), piggybackState.personPiggybacking.animDict, piggybackState.personPiggybacking.anim, 3) then
+                    TaskPlayAnim(PlayerPedId(), piggybackState.personPiggybacking.animDict, piggybackState.personPiggybacking.anim, 8.0, -8.0, 100000, piggybackState.personPiggybacking.flag, 0, false, false, false)
+                end
+            end
+        end
+        Wait(0)
+    end
+end)
+
+-- ============================================================
+-- MODUL: TakeHostage - CLIENT
+-- ============================================================
+-- Übernommen aus dem eigenständigen "TakeHostage"-Script.
+-- Über Config.TakeHostage.enabled an/aus schaltbar.
+-- Hilfsfunktionen wurden mit "TH_" Präfix versehen (Konflikt mit
+-- identisch benannten lokalen Helpern aus dem PiggyBack-Modul oben).
+-- ============================================================
+
+local takeHostageState = {
+    InProgress = false,
+    type = "",
+    targetSrc = -1,
+    agressor = {
+        animDict = "anim@gangops@hostage@",
+        anim = "perp_idle",
+        flag = 49,
+    },
+    hostage = {
+        animDict = "anim@gangops@hostage@",
+        anim = "victim_idle",
+        attachX = -0.24,
+        attachY = 0.11,
+        attachZ = 0.0,
+        flag = 49,
+    }
+}
+
+local function TH_Notify(text)
+    SetTextComponentFormat("STRING")
+    AddTextComponentString(text)
+    DisplayHelpTextFromStringLabel(0, 0, 1, -1)
+end
+
+local function TH_GetClosestPlayer(radius)
+    local players = GetActivePlayers()
+    local closestDistance = -1
+    local closestPlayer = -1
+    local playerPed = PlayerPedId()
+    local playerCoords = GetEntityCoords(playerPed)
+
+    for _, playerId in ipairs(players) do
+        local targetPed = GetPlayerPed(playerId)
+        if targetPed ~= playerPed then
+            local targetCoords = GetEntityCoords(targetPed)
+            local distance = #(targetCoords - playerCoords)
+            if closestDistance == -1 or closestDistance > distance then
+                closestPlayer = playerId
+                closestDistance = distance
+            end
+        end
+    end
+    if closestDistance ~= -1 and closestDistance <= radius then
+        return closestPlayer
+    else
+        return nil
+    end
+end
+
+local function TH_EnsureAnimDict(animDict)
+    if not HasAnimDictLoaded(animDict) then
+        RequestAnimDict(animDict)
+        while not HasAnimDictLoaded(animDict) do
+            Wait(0)
+        end
+    end
+    return animDict
+end
+
+local function TH_DrawText(str)
+    SetTextEntry_2("STRING")
+    AddTextComponentString(str)
+    EndTextCommandPrint(1000, 1)
+end
+
+local function TH_CallTakeHostage()
+    if not Config.TakeHostage.enabled then return end
+
+    ClearPedSecondaryTask(PlayerPedId())
+    DetachEntity(PlayerPedId(), true, false)
+
+    local canTakeHostage = false
+    local foundWeapon = nil
+    for i = 1, #Config.TakeHostage.allowedWeapons do
+        if HasPedGotWeapon(PlayerPedId(), Config.TakeHostage.allowedWeapons[i], false) then
+            if GetAmmoInPedWeapon(PlayerPedId(), Config.TakeHostage.allowedWeapons[i]) > 0 then
+                canTakeHostage = true
+                foundWeapon = Config.TakeHostage.allowedWeapons[i]
+                break
+            end
+        end
+    end
+
+    if not canTakeHostage then
+        TH_Notify("Du brauchst eine Pistole mit Munition, um jemanden als Geisel zu nehmen!")
+        return
+    end
+
+    if not takeHostageState.InProgress then
+        local closestPlayer = TH_GetClosestPlayer(Config.TakeHostage.maxDistance)
+        if closestPlayer then
+            local targetSrc = GetPlayerServerId(closestPlayer)
+            if targetSrc ~= -1 then
+                SetCurrentPedWeapon(PlayerPedId(), foundWeapon, true)
+                takeHostageState.InProgress = true
+                takeHostageState.targetSrc = targetSrc
+                TriggerServerEvent("TakeHostage:sync", targetSrc)
+                TH_EnsureAnimDict(takeHostageState.agressor.animDict)
+                takeHostageState.type = "agressor"
+            else
+                TH_Notify("~r~Niemand in der Nähe, um als Geisel genommen zu werden!")
+            end
+        else
+            TH_Notify("~r~Niemand in der Nähe, um als Geisel genommen zu werden!")
+        end
+    end
+end
+
+RegisterCommand(Config.TakeHostage.command, function()
+    TH_CallTakeHostage()
+end, false)
+
+RegisterCommand(Config.TakeHostage.shortCommand, function()
+    TH_CallTakeHostage()
+end, false)
+
+RegisterNetEvent("TakeHostage:syncTarget")
+AddEventHandler("TakeHostage:syncTarget", function(target)
+    local targetPed = GetPlayerPed(GetPlayerFromServerId(target))
+    takeHostageState.InProgress = true
+    TH_EnsureAnimDict(takeHostageState.hostage.animDict)
+    AttachEntityToEntity(PlayerPedId(), targetPed, 0, takeHostageState.hostage.attachX, takeHostageState.hostage.attachY, takeHostageState.hostage.attachZ, 0.5, 0.5, 0.0, false, false, false, false, 2, false)
+    takeHostageState.type = "hostage"
+end)
+
+RegisterNetEvent("TakeHostage:releaseHostage")
+AddEventHandler("TakeHostage:releaseHostage", function()
+    takeHostageState.InProgress = false
+    takeHostageState.type = ""
+    DetachEntity(PlayerPedId(), true, false)
+    TH_EnsureAnimDict("reaction@shove")
+    TaskPlayAnim(PlayerPedId(), "reaction@shove", "shoved_back", 8.0, -8.0, -1, 0, 0, false, false, false)
+    Wait(250)
+    ClearPedSecondaryTask(PlayerPedId())
+end)
+
+RegisterNetEvent("TakeHostage:killHostage")
+AddEventHandler("TakeHostage:killHostage", function()
+    takeHostageState.InProgress = false
+    takeHostageState.type = ""
+    SetEntityHealth(PlayerPedId(), 0)
+    DetachEntity(PlayerPedId(), true, false)
+    TH_EnsureAnimDict("anim@gangops@hostage@")
+    TaskPlayAnim(PlayerPedId(), "anim@gangops@hostage@", "victim_fail", 8.0, -8.0, -1, 168, 0, false, false, false)
+end)
+
+RegisterNetEvent("TakeHostage:cl_stop")
+AddEventHandler("TakeHostage:cl_stop", function()
+    takeHostageState.InProgress = false
+    takeHostageState.type = ""
+    ClearPedSecondaryTask(PlayerPedId())
+    DetachEntity(PlayerPedId(), true, false)
+end)
+
+CreateThread(function()
+    while true do
+        if takeHostageState.type == "agressor" then
+            if not IsEntityPlayingAnim(PlayerPedId(), takeHostageState.agressor.animDict, takeHostageState.agressor.anim, 3) then
+                TaskPlayAnim(PlayerPedId(), takeHostageState.agressor.animDict, takeHostageState.agressor.anim, 8.0, -8.0, 100000, takeHostageState.agressor.flag, 0, false, false, false)
+            end
+        elseif takeHostageState.type == "hostage" then
+            if not IsEntityPlayingAnim(PlayerPedId(), takeHostageState.hostage.animDict, takeHostageState.hostage.anim, 3) then
+                TaskPlayAnim(PlayerPedId(), takeHostageState.hostage.animDict, takeHostageState.hostage.anim, 8.0, -8.0, 100000, takeHostageState.hostage.flag, 0, false, false, false)
+            end
+        end
+        Wait(0)
+    end
+end)
+
+CreateThread(function()
+    while true do
+        if takeHostageState.type == "agressor" then
+            DisableControlAction(0, 24, true) -- disable attack
+            DisableControlAction(0, 25, true) -- disable aim
+            DisableControlAction(0, 47, true) -- disable weapon
+            DisableControlAction(0, 58, true) -- disable weapon
+            DisableControlAction(0, 21, true) -- disable sprint
+            DisablePlayerFiring(PlayerPedId(), true)
+            TH_DrawText("Drücke [G] zum Freilassen, [H] zum Töten")
+
+            if IsEntityDead(PlayerPedId()) then
+                takeHostageState.type = ""
+                takeHostageState.InProgress = false
+                TH_EnsureAnimDict("reaction@shove")
+                TaskPlayAnim(PlayerPedId(), "reaction@shove", "shove_var_a", 8.0, -8.0, -1, 168, 0, false, false, false)
+                TriggerServerEvent("TakeHostage:releaseHostage", takeHostageState.targetSrc)
+            end
+
+            if IsDisabledControlJustPressed(0, 47) then -- release
+                takeHostageState.type = ""
+                takeHostageState.InProgress = false
+                TH_EnsureAnimDict("reaction@shove")
+                TaskPlayAnim(PlayerPedId(), "reaction@shove", "shove_var_a", 8.0, -8.0, -1, 168, 0, false, false, false)
+                TriggerServerEvent("TakeHostage:releaseHostage", takeHostageState.targetSrc)
+            elseif IsDisabledControlJustPressed(0, 74) then -- kill
+                takeHostageState.type = ""
+                takeHostageState.InProgress = false
+                TH_EnsureAnimDict("anim@gangops@hostage@")
+                TaskPlayAnim(PlayerPedId(), "anim@gangops@hostage@", "perp_fail", 8.0, -8.0, -1, 168, 0, false, false, false)
+                TriggerServerEvent("TakeHostage:killHostage", takeHostageState.targetSrc)
+                TriggerServerEvent("TakeHostage:stop", takeHostageState.targetSrc)
+                Wait(100)
+                SetPedShootsAtCoord(PlayerPedId(), 0.0, 0.0, 0.0, 0)
+            end
+        elseif takeHostageState.type == "hostage" then
+            DisableControlAction(0, 21, true) -- disable sprint
+            DisableControlAction(0, 24, true) -- disable attack
+            DisableControlAction(0, 25, true) -- disable aim
+            DisableControlAction(0, 47, true) -- disable weapon
+            DisableControlAction(0, 58, true) -- disable weapon
+            DisableControlAction(0, 263, true) -- disable melee
+            DisableControlAction(0, 264, true) -- disable melee
+            DisableControlAction(0, 257, true) -- disable melee
+            DisableControlAction(0, 140, true) -- disable melee
+            DisableControlAction(0, 141, true) -- disable melee
+            DisableControlAction(0, 142, true) -- disable melee
+            DisableControlAction(0, 143, true) -- disable melee
+            DisableControlAction(0, 75, true) -- disable exit vehicle
+            DisableControlAction(27, 75, true) -- disable exit vehicle
+            DisableControlAction(0, 22, true) -- disable jump
+            DisableControlAction(0, 32, true) -- disable move up
+            DisableControlAction(0, 268, true)
+            DisableControlAction(0, 33, true) -- disable move down
+            DisableControlAction(0, 269, true)
+            DisableControlAction(0, 34, true) -- disable move left
+            DisableControlAction(0, 270, true)
+            DisableControlAction(0, 35, true) -- disable move right
+            DisableControlAction(0, 271, true)
+        end
+        Wait(0)
+    end
+end)
+
+-- ============================================================
+-- MODUL: Lifeinvader - CLIENT
+-- ============================================================
+-- Über Config.Lifeinvader.enabled an/aus schaltbar. Preis wird nur
+-- zur Anzeige lokal berechnet - die verbindliche Berechnung und
+-- alle Prüfungen (Länge, verbotene Wörter, Cooldown, Geld) laufen
+-- ausschließlich serverseitig (siehe server.lua), damit nichts über
+-- den Client manipuliert werden kann.
+-- ============================================================
+
+do
+    local liOpen = false
+    local liBlip = nil
+    local liFeedCache = {} -- lokaler Spiegel des Server-Feeds, für sofortige Anzeige beim Öffnen
+
+    CreateThread(function()
+        if not Config.Lifeinvader.enabled then return end
+        if not Config.Lifeinvader.location.blip.enabled then return end
+
+        local b = Config.Lifeinvader.location.blip
+        local loc = Config.Lifeinvader.location.coords
+
+        liBlip = AddBlipForCoord(loc.x, loc.y, loc.z)
+        SetBlipSprite(liBlip, b.sprite)
+        SetBlipColour(liBlip, b.color)
+        SetBlipScale(liBlip, b.scale)
+        SetBlipAsShortRange(liBlip, true)
+
+        BeginTextCommandSetBlipName("STRING")
+        AddTextComponentString(b.label)
+        EndTextCommandSetBlipName(liBlip)
+    end)
+
+    -- Optionaler NPC direkt am Terminal (rein optisch, kein Dialog nötig)
+    CreateThread(function()
+        if not Config.Lifeinvader.enabled then return end
+
+        local npc = Config.Lifeinvader.location.npc
+        if not npc or not npc.enabled then return end
+
+        RequestModel(npc.model)
+        local timeout = 0
+        while not HasModelLoaded(npc.model) and timeout < 5000 do
+            Wait(10)
+            timeout = timeout + 10
+        end
+        if not HasModelLoaded(npc.model) then return end
+
+        local ped = CreatePed(4, npc.model, npc.coords.x, npc.coords.y, npc.coords.z - 1.0, npc.coords.w, false, true)
+        SetEntityAsMissionEntity(ped, true, true)
+        SetBlockingOfNonTemporaryEvents(ped, true)
+        SetPedFleeAttributes(ped, 0, false)
+        FreezeEntityPosition(ped, true)
+        SetPedCanRagdoll(ped, false)
+        SetPedDiesWhenInjured(ped, false)
+        SetEntityInvincible(ped, true)
+
+        if npc.scenario and npc.scenario ~= '' then
+            TaskStartScenarioInPlace(ped, npc.scenario, 0, true)
+        end
+
+        SetModelAsNoLongerNeeded(npc.model)
+    end)
+
+    local function OpenLifeinvaderMenu()
+        if liOpen then return end
+        liOpen = true
+
+        if Config.Lifeinvader.openSound then
+            PlaySoundFrontend(-1, Config.Lifeinvader.openSoundName, Config.Lifeinvader.openSoundSet, true)
+        end
+
+        SetNuiFocus(true, true)
+        SendNUIMessage({
+            action = "openLifeinvader",
+            serverName = Config.Lifeinvader.serverName,
+            logo = Config.Lifeinvader.logo,
+            maxLength = Config.Lifeinvader.maxLength,
+            priceMode = Config.Lifeinvader.price.mode,
+            priceFixed = Config.Lifeinvader.price.fixed,
+            pricePerChar = Config.Lifeinvader.price.perChar,
+            allowName = Config.Lifeinvader.allowName,
+            nameDefault = Config.Lifeinvader.nameDefault,
+            fields = Config.Lifeinvader.fields,
+            feedEnabled = Config.Lifeinvader.feed.enabled,
+            feedMaxAgeMinutes = Config.Lifeinvader.feed.maxAgeMinutes,
+            feed = liFeedCache,
+        })
+
+        if Config.Lifeinvader.feed.enabled then
+            TriggerServerEvent(Config.Lifeinvader.eventPrefix .. ":requestFeed")
+        end
+    end
+
+    RegisterNUICallback("closeLifeinvader", function(_, cb)
+        liOpen = false
+        SetNuiFocus(false, false)
+        cb("ok")
+    end)
+
+    RegisterNUICallback("submitLifeinvader", function(data, cb)
+        if data and data.text then
+            TriggerServerEvent(
+                Config.Lifeinvader.eventPrefix .. ":submit",
+                data.text,
+                data.withName and true or false,
+                data.name or '',
+                data.phone or ''
+            )
+        end
+        cb("ok")
+    end)
+
+    RegisterNetEvent(Config.Lifeinvader.eventPrefix .. ":result")
+    AddEventHandler(Config.Lifeinvader.eventPrefix .. ":result", function(success, message)
+        SendNUIMessage({
+            action = "lifeinvaderResult",
+            success = success,
+            message = message,
+        })
+
+        if success then
+            liOpen = false
+            SetNuiFocus(false, false)
+            SendNUIMessage({ action = "closeLifeinvader" })
+        end
+    end)
+
+    RegisterNetEvent(Config.Lifeinvader.eventPrefix .. ":broadcast")
+    AddEventHandler(Config.Lifeinvader.eventPrefix .. ":broadcast", function(text)
+        SendNUIMessage({
+            action = "lifeinvaderBroadcast",
+            serverName = Config.Lifeinvader.serverName,
+            text = text,
+            duration = Config.Lifeinvader.broadcastDuration,
+        })
+
+        MC_Notify(Config.Lifeinvader.notification.title, text, Config.Lifeinvader.notification.type)
+    end)
+
+    -- Feed: initialer Sync beim Öffnen (Server schickt kompletten aktuellen Stand)
+    RegisterNetEvent(Config.Lifeinvader.eventPrefix .. ":feedSync")
+    AddEventHandler(Config.Lifeinvader.eventPrefix .. ":feedSync", function(feed)
+        liFeedCache = feed or {}
+        SendNUIMessage({ action = "lifeinvaderFeedSync", feed = liFeedCache })
+    end)
+
+    -- Feed: neuer Post kommt live rein (auch während das Menü schon offen ist)
+    RegisterNetEvent(Config.Lifeinvader.eventPrefix .. ":feedPush")
+    AddEventHandler(Config.Lifeinvader.eventPrefix .. ":feedPush", function(entry)
+        table.insert(liFeedCache, 1, entry)
+        while #liFeedCache > (Config.Lifeinvader.feed.maxPosts or 20) do
+            table.remove(liFeedCache)
+        end
+        SendNUIMessage({ action = "lifeinvaderFeedSync", feed = liFeedCache })
+    end)
+
+    if Config.Lifeinvader.command and Config.Lifeinvader.command ~= '' then
+        RegisterCommand(Config.Lifeinvader.command, function()
+            if not Config.Lifeinvader.enabled then return end
+            OpenLifeinvaderMenu()
+        end, false)
+    end
+
+    -- Export für Handy-Scripts (z.B. qs-smartphone): öffnet das Menü ohne dass man
+    -- physisch am Terminal stehen muss. Nur aktiv, wenn phoneIntegration.enabled = true.
+    -- Beispiel-Nutzung aus einem Phone-Script: exports['mc_core']:OpenLifeinvader()
+    exports('OpenLifeinvader', function()
+        if not Config.Lifeinvader.enabled then return end
+        if not Config.Lifeinvader.phoneIntegration.enabled then return end
+        OpenLifeinvaderMenu()
+    end)
+
+    CreateThread(function()
+        while true do
+            local sleep = 1000
+
+            if Config.Lifeinvader.enabled then
+                local loc = Config.Lifeinvader.location
+                local ped = PlayerPedId()
+                local coords = GetEntityCoords(ped)
+                local dist = #(coords - loc.coords)
+                local showDistance = loc.showDistance or 15.0
+
+                if dist < showDistance then
+                    sleep = 0
+
+                    if loc.marker.enabled then
+                        local m = loc.marker
+                        DrawMarker(
+                            m.type,
+                            loc.coords.x, loc.coords.y, loc.coords.z - 1.0,
+                            0.0, 0.0, 0.0,
+                            0.0, 0.0, 0.0,
+                            m.size.x, m.size.y, m.size.z,
+                            m.color.r, m.color.g, m.color.b, m.color.a,
+                            false, true, 2, false, nil, nil, false
+                        )
+                    end
+
+                    if dist < loc.radius then
+                        MC_NotifyHelp("Drücke ~INPUT_CONTEXT~ um eine Werbung aufzugeben")
+
+                        if IsControlJustPressed(0, 38) and not liOpen then
+                            OpenLifeinvaderMenu()
+                        end
+                    end
+                end
+            end
+
+            Wait(sleep)
+        end
+    end)
+end
+
+-- ============================================================
+-- SECTION: formular.lua  (übernommen aus mc_formular)
+-- ============================================================
+-- FIX: Config.Command war im Original definiert, aber nie als
+-- Command registriert - das Formular ging NUR über den Standort auf.
+-- Jetzt öffnet sowohl [E] am Standort als auch der Chat-Command
+-- (/formular) dieselbe NUI.
+do
+    local function OpenFormularUI()
+        local playerData = ESX.GetPlayerData()
+
+        SetNuiFocus(true, true)
+        SendNUIMessage({
+            action = "openFormular",
+            fields = FormularConfig.Fields,
+            -- automatisch ermittelte Werte (aktuell nur Telefonnummer) für
+            -- Felder mit field.auto == "phone_number"
+            autoValues = {
+                phone_number = playerData and playerData.phone_number or nil
+            }
+        })
+    end
+
+    RegisterNetEvent("mc_core:formular:open")
+    AddEventHandler("mc_core:formular:open", OpenFormularUI)
+
+    CreateThread(function()
+        while true do
+            local sleep = 1000
+            local coords = GetEntityCoords(PlayerPedId())
+            local dist = #(coords - FormularConfig.Location)
+
+            if dist < (FormularConfig.Radius or 3.0) then
+                sleep = 0
+
+                DrawText3D(
+                    FormularConfig.Location.x,
+                    FormularConfig.Location.y,
+                    FormularConfig.Location.z + 1.0,
+                    "~g~[E]~w~ Formular öffnen"
+                )
+
+                if IsControlJustReleased(0, 38) then
+                    OpenFormularUI()
+                end
+            end
+
+            Wait(sleep)
+        end
+    end)
+
+    RegisterNUICallback("submitFormular", function(data, cb)
+        SetNuiFocus(false, false)
+        TriggerServerEvent("formular:submit", data)
+        cb("ok")
+    end)
+
+    RegisterNUICallback("closeFormular", function(_, cb)
+        SetNuiFocus(false, false)
+        cb("ok")
+    end)
+end
+
+-- ============================================================
+-- SECTION: zombie.lua  (übernommen aus mc_zombie)
+-- Feste Zone, geteilte (networked) Zombies
+-- ============================================================
+-- Nutzt ZombieConfig statt Config (siehe config.lua - eigene Config-
+-- Tabelle, um Kollisionen mit dem Rest von mc_core zu vermeiden).
+--
+-- FIX: Das Original nutzte FiveM's Backtick-Hash-Literale (z.B.
+-- `PLAYER`, `SCRIPT_TASK_COMBAT`), die nur im FiveM-eigenen Lua-
+-- Runtime gültig sind. Hier durch GetHashKey(...) ersetzt - macht
+-- exakt dasselbe, ist aber überall gültiges Lua (u.a. mit Standard-
+-- Lua-Tools prüfbar).
+do
+    local hasShownZombieHelpNotify = false
+    local zombieLocallyReportedDead = {}   -- [netId] = true, verhindert mehrfaches Melden desselben Zombies
+    local zombieLastAttackTime = {}        -- Cooldown-Tracking pro Zombie (nur fuer waffenlose Zombies)
+
+    -- Decorator, um Zombie-Peds eindeutig zu markieren (wichtig bei Freemode-Masken-Modus,
+    -- da dort das Modell mit echten Spielern identisch sein kann - der Decorator unterscheidet
+    -- zuverlaessig "das ist ein Script-Zombie" von "das ist ein echter Spieler")
+    DecorRegister('zsc_zombie', 3) -- Typ 3 = int
+
+    local function IsZombiePed(ped)
+        return DecorExistOn(ped, 'zsc_zombie')
+    end
+
+    -- ------------------------------------------------
+    -- Zombie-Look: torkelnder Gang, Wunden, gelegentliches Stoehnen
+    -- ------------------------------------------------
+    local function ApplyZombieLook(ped)
+        local isMale = IsPedMale(ped)
+        local clipSet = isMale and ZombieConfig.ZombieClipsetMale or ZombieConfig.ZombieClipsetFemale
+
+        RequestClipSet(clipSet)
+        local timeout = 0
+        while not HasClipSetLoaded(clipSet) and timeout < 2000 do
+            Wait(10)
+            timeout = timeout + 10
+        end
+        if HasClipSetLoaded(clipSet) then
+            SetPedMovementClipset(ped, clipSet, 1.0)
+        end
+
+        SetPedMoveRateOverride(ped, ZombieConfig.ZombieWalkSpeed)
+
+        if ZombieConfig.ZombieDamagePacks and #ZombieConfig.ZombieDamagePacks > 0 then
+            local pack = ZombieConfig.ZombieDamagePacks[math.random(#ZombieConfig.ZombieDamagePacks)]
+            ApplyPedDamagePack(ped, pack, 0.0, 1.0)
+        end
+
+        if ZombieConfig.PlayZombieSounds then
+            CreateThread(function()
+                while DoesEntityExist(ped) and not IsPedDeadOrDying(ped, true) do
+                    Wait(math.random(4000, 9000))
+                    if DoesEntityExist(ped) then
+                        PlayAmbientSpeech1(ped, ZombieConfig.ZombieSoundName, "SPEECH_PARAMS_FORCE")
+                    end
+                end
+            end)
+        end
+    end
+
+    -- ------------------------------------------------
+    -- Einen Zombie an einer bestimmten Position erstellen (wird per Server-Event ausgeloest,
+    -- damit garantiert nur EIN Client pro Spawn-Slot einen Ped erzeugt)
+    -- ------------------------------------------------
+    local function CreateZombieAt(slotIndex, coords)
+        local model
+        if ZombieConfig.UseFreemodeMasks then
+            model = ZombieConfig.FreemodeModels[math.random(#ZombieConfig.FreemodeModels)]
+        else
+            model = ZombieConfig.ZombieModels[math.random(#ZombieConfig.ZombieModels)]
+        end
+
+        RequestModel(model)
+        local timeout = 0
+        while not HasModelLoaded(model) and timeout < 5000 do
+            Wait(10)
+            timeout = timeout + 10
+        end
+        if not HasModelLoaded(model) then
+            return
+        end
+
+        local ped = CreatePed(4, model, coords.x, coords.y, coords.z, math.random(0, 360) + 0.0, true, true)
+
+        if ZombieConfig.UseFreemodeMasks then
+            SetPedDefaultComponentVariation(ped)
+            SetPedHeadBlendData(ped, 0, 0, 0, 0, 0, 0, 0.5, 0.5, 0.0, false)
+            SetPedComponentVariation(ped, 1, ZombieConfig.ZombieMaskDrawable, ZombieConfig.ZombieMaskTexture, 0)
+            SetPedComponentVariation(ped, 11, ZombieConfig.ZombieDecalDrawable, ZombieConfig.ZombieDecalTexture, 0)
+        end
+
+        DecorSetInt(ped, 'zsc_zombie', 1)
+
+        SetEntityAsMissionEntity(ped, true, true)
+        SetPedFleeAttributes(ped, 0, false)
+        SetPedCombatAttributes(ped, 46, true)
+        SetPedCombatAttributes(ped, 5, true)
+        SetPedCombatAbility(ped, ZombieConfig.PedWeapon and 2 or 0)
+        SetPedCombatMovement(ped, ZombieConfig.PedWeapon and 2 or 0)
+        SetPedAccuracy(ped, ZombieConfig.PedWeapon and 25 or 0)
+        SetPedSeeingRange(ped, ZombieConfig.AggroRange + 10.0)
+        SetPedHearingRange(ped, ZombieConfig.AggroRange + 10.0)
+        SetPedAlertness(ped, 3)
+        SetEntityMaxHealth(ped, ZombieConfig.ZombieHealth)
+        SetEntityHealth(ped, ZombieConfig.ZombieHealth)
+        SetPedCanRagdoll(ped, true)
+        SetPedSuffersCriticalHits(ped, false)
+
+        if ZombieConfig.PedWeapon and ZombieConfig.WeaponPed and #ZombieConfig.WeaponPed > 0 then
+            local weapon = ZombieConfig.WeaponPed[math.random(#ZombieConfig.WeaponPed)]
+            GiveWeaponToPed(ped, weapon, 250, false, true)
+        end
+
+        local group = GetHashKey("ZOMBIE_HOSTILE")
+        AddRelationshipGroup("ZOMBIE_HOSTILE")
+        SetPedRelationshipGroupHash(ped, group)
+        SetRelationshipBetweenGroups(5, group, GetHashKey('PLAYER'))
+        SetRelationshipBetweenGroups(5, GetHashKey('PLAYER'), group)
+
+        TaskWanderStandard(ped, 10.0, 10)
+        ApplyZombieLook(ped)
+
+        SetModelAsNoLongerNeeded(model)
+        zombieLastAttackTime[ped] = 0
+
+        local netId = NetworkGetNetworkIdFromEntity(ped)
+        TriggerServerEvent('zombie-script:zombieSpawned', slotIndex, netId)
+    end
+
+    RegisterNetEvent('zombie-script:spawnAtSlot')
+    AddEventHandler('zombie-script:spawnAtSlot', function(slotIndex, coords)
+        CreateZombieAt(slotIndex, coords)
+    end)
+
+    RegisterNetEvent('zombie-script:deleteZombie')
+    AddEventHandler('zombie-script:deleteZombie', function(netId)
+        if NetworkDoesNetworkIdExist(netId) then
+            local ped = NetworkGetEntityFromNetworkId(netId)
+            if DoesEntityExist(ped) then
+                DeleteEntity(ped)
+            end
+        end
+    end)
+
+    -- ------------------------------------------------
+    -- Distanz-Helfer
+    -- ------------------------------------------------
+    local function DistanceToZombieZone()
+        local coords = GetEntityCoords(PlayerPedId())
+        return #(coords - ZombieConfig.Zone.coords)
+    end
+
+    -- ------------------------------------------------
+    -- Spawn-Request-Loop: solange ich in der Naehe der Zone bin, frage ich regelmaessig
+    -- den Server nach einem freien Spawn-Slot (der Server entscheidet, ob noch Platz ist)
+    -- ------------------------------------------------
+    CreateThread(function()
+        while true do
+            Wait(ZombieConfig.SpawnCheckInterval)
+
+            if DistanceToZombieZone() <= ZombieConfig.ZoneCheckDistance then
+                TriggerServerEvent('zombie-script:requestSpawnSlot')
+
+                if not hasShownZombieHelpNotify then
+                    hasShownZombieHelpNotify = true
+                    BeginTextCommandDisplayHelp("STRING")
+                    AddTextComponentSubstringPlayerName(ZombieConfig.HelpNotify)
+                    EndTextCommandDisplayHelp(0, false, true, -1)
+                end
+            elseif DistanceToZombieZone() > ZombieConfig.ZoneCheckDistance + 20.0 then
+                -- weit genug weg -> beim naechsten Betreten wieder anzeigen
+                hasShownZombieHelpNotify = false
+            end
+        end
+    end)
+
+    -- ------------------------------------------------
+    -- Sweeper: erkennt tote Zombies (unabhaengig davon, welcher Client sie erstellt hat)
+    -- und meldet dies dem Server. So gibt es keine "Geister-Zombies" mehr, falls der
+    -- urspruengliche Spawner-Client disconnectet.
+    --
+    -- FIX: Zombies sollen NUR innerhalb des Zonen-Kreises (ZombieConfig.Zone.radius)
+    -- bleiben. Vorher gab es keine Begrenzung - ein Zombie, der einen fliehenden
+    -- Spieler verfolgt hat (TaskCombatPed), ist ihm einfach bis ans Ende der Map
+    -- hinterhergelaufen. Jetzt wird bei jedem Sweeper-Durchlauf geprüft, ob ein
+    -- Zombie außerhalb des Kreises steht - falls ja, wird er zurück in Richtung
+    -- Zonen-Mittelpunkt geschickt.
+    -- ------------------------------------------------
+    local zombieLeashCooldown = {}
+
+    CreateThread(function()
+        while true do
+            Wait(500)
+
+            if DistanceToZombieZone() <= ZombieConfig.ZoneCheckDistance then
+                local playerPed = PlayerPedId()
+                local pool = GetGamePool('CPed')
+                local now = GetGameTimer()
+
+                for _, ped in ipairs(pool) do
+                    if DoesEntityExist(ped) and IsZombiePed(ped) then
+                        local netId = NetworkGetNetworkIdFromEntity(ped)
+
+                        if IsPedDeadOrDying(ped, true) and not zombieLocallyReportedDead[netId] then
+                            zombieLocallyReportedDead[netId] = true
+
+                            local killerPed = GetPedSourceOfDeath(ped)
+                            local killedByMe = (killerPed == playerPed)
+
+                            TriggerServerEvent('zombie-script:zombieDied', netId, killedByMe)
+                        elseif not IsPedDeadOrDying(ped, true) then
+                            local pedCoords = GetEntityCoords(ped)
+                            local distFromCenter = #(pedCoords - ZombieConfig.Zone.coords)
+
+                            if distFromCenter > ZombieConfig.Zone.radius then
+                                -- nicht bei jedem Tick neu zwingen (würde ruckeln) - nur alle 2s pro Zombie
+                                local lastLeash = zombieLeashCooldown[ped] or 0
+                                if now - lastLeash >= 2000 then
+                                    zombieLeashCooldown[ped] = now
+                                    ClearPedTasksImmediately(ped)
+                                    TaskGoToCoordAnyMeans(
+                                        ped,
+                                        ZombieConfig.Zone.coords.x, ZombieConfig.Zone.coords.y, ZombieConfig.Zone.coords.z,
+                                        ZombieConfig.ZombieWalkSpeed, 0, false, 786603, 0xbf800000
+                                    )
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- ------------------------------------------------
+    -- Nahkampf-Schaden fuer waffenlose Zombies (bei bewaffneten Zombies uebernimmt
+    -- das normale Waffen-/Kampfsystem des Spiels automatisch den Schaden)
+    -- ------------------------------------------------
+    if not ZombieConfig.PedWeapon then
+        CreateThread(function()
+            while true do
+                Wait(250)
+
+                if DistanceToZombieZone() <= ZombieConfig.ZoneCheckDistance then
+                    local playerPed = PlayerPedId()
+                    local playerCoords = GetEntityCoords(playerPed)
+                    local playerInsideZone = #(playerCoords - ZombieConfig.Zone.coords) <= ZombieConfig.Zone.radius
+                    local pool = GetGamePool('CPed')
+                    local now = GetGameTimer()
+
+                    for _, ped in ipairs(pool) do
+                        if DoesEntityExist(ped) and IsZombiePed(ped) and not IsPedDeadOrDying(ped, true) then
+                            local pedCoords = GetEntityCoords(ped)
+                            local dist = #(playerCoords - pedCoords)
+
+                            -- Nur angreifen/verfolgen, wenn der Spieler auch INNERHALB
+                            -- der Zone steht - sonst würde der Zombie ihm aus dem Kreis
+                            -- heraus hinterherlaufen.
+                            if playerInsideZone and dist <= ZombieConfig.AggroRange then
+                                if GetScriptTaskStatus(ped, GetHashKey('SCRIPT_TASK_COMBAT')) ~= 1 then
+                                    TaskCombatPed(ped, playerPed, 0, 16)
+                                end
+                            end
+
+                            if playerInsideZone and dist <= ZombieConfig.AttackRange then
+                                local last = zombieLastAttackTime[ped] or 0
+                                if now - last >= ZombieConfig.AttackCooldown then
+                                    zombieLastAttackTime[ped] = now
+                                    local newHealth = GetEntityHealth(playerPed) - ZombieConfig.AttackDamage
+                                    SetEntityHealth(playerPed, math.max(newHealth, 0))
+                                    ShakeGameplayCam("SMALL_EXPLOSION_SHAKE", 0.15)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
+    -- ------------------------------------------------
+    -- Zonen-Marker + Blip
+    -- ------------------------------------------------
+    CreateThread(function()
+        if ZombieConfig.Blip.enabled then
+            local blip = AddBlipForCoord(ZombieConfig.Zone.coords.x, ZombieConfig.Zone.coords.y, ZombieConfig.Zone.coords.z)
+            SetBlipSprite(blip, ZombieConfig.Blip.sprite)
+            SetBlipDisplay(blip, ZombieConfig.Blip.display)
+            SetBlipScale(blip, ZombieConfig.Blip.scale)
+            SetBlipColour(blip, ZombieConfig.Blip.color)
+            SetBlipAsShortRange(blip, true)
+            BeginTextCommandSetBlipName("STRING")
+            AddTextComponentSubstringPlayerName(ZombieConfig.Blip.label)
+            EndTextCommandSetBlipName(blip)
+        end
+
+        while true do
+            Wait(0)
+
+            if DistanceToZombieZone() <= ZombieConfig.Marker.drawDistance then
+                DrawMarker(
+                    ZombieConfig.Marker.id,
+                    ZombieConfig.Zone.coords.x, ZombieConfig.Zone.coords.y, ZombieConfig.Zone.coords.z - 1.0,
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0,
+                    ZombieConfig.Marker.sizeX, ZombieConfig.Marker.sizeY, ZombieConfig.Marker.sizeZ,
+                    ZombieConfig.Marker.r, ZombieConfig.Marker.g, ZombieConfig.Marker.b, ZombieConfig.Marker.a,
+                    false, false, 2, false, nil, nil, false
+                )
+            else
+                Wait(1000)
+            end
+        end
+    end)
+
+    -- ------------------------------------------------
+    -- Aufraeumen beim Beenden der Ressource
+    -- ------------------------------------------------
+    AddEventHandler('onResourceStop', function(resourceName)
+        if GetCurrentResourceName() ~= resourceName then
+            return
+        end
+
+        local pool = GetGamePool('CPed')
+        for _, ped in ipairs(pool) do
+            if DoesEntityExist(ped) and IsZombiePed(ped) then
+                DeleteEntity(ped)
+            end
+        end
+    end)
+
+    -- ================================
+    --   MASKEN-FINDER (DEBUG-TOOL)
+    -- ================================
+    local finderMaskDrawable = 0
+    local finderMaskTexture = 0
+    local finderDecalDrawable = 0
+
+    local function PrintFinderState()
+        TriggerEvent('chat:addMessage', {
+            args = { '^3[Zombie Maske]', ('Maske: %d / Textur: %d | Decal: %d'):format(
+                finderMaskDrawable, finderMaskTexture, finderDecalDrawable) }
+        })
+    end
+
+    RegisterCommand('zombiemask', function(source, args)
+        local ped = PlayerPedId()
+        local sub = args[1]
+
+        if sub == 'mask+' then
+            finderMaskDrawable = finderMaskDrawable + 1
+            finderMaskTexture = 0
+        elseif sub == 'mask-' then
+            finderMaskDrawable = math.max(0, finderMaskDrawable - 1)
+            finderMaskTexture = 0
+        elseif sub == 'tex+' then
+            finderMaskTexture = finderMaskTexture + 1
+        elseif sub == 'tex-' then
+            finderMaskTexture = math.max(0, finderMaskTexture - 1)
+        elseif sub == 'decal+' then
+            finderDecalDrawable = finderDecalDrawable + 1
+        elseif sub == 'decal-' then
+            finderDecalDrawable = math.max(0, finderDecalDrawable - 1)
+        elseif sub == 'reset' then
+            finderMaskDrawable, finderMaskTexture, finderDecalDrawable = 0, 0, 0
+        else
+            TriggerEvent('chat:addMessage', {
+                args = { '^3[Zombie Maske]', 'Nutzung: /zombiemask mask+ | mask- | tex+ | tex- | decal+ | decal- | reset' }
+            })
+            return
+        end
+
+        SetPedComponentVariation(ped, 1, finderMaskDrawable, finderMaskTexture, 0)
+        SetPedComponentVariation(ped, 11, finderDecalDrawable, 0, 0)
+        PrintFinderState()
+    end, false)
 end

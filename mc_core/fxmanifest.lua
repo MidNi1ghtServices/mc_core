@@ -4,15 +4,15 @@ lua54 'yes'
 
 author 'Nigh1'
 description 'MC Core'
-version '2.0.1'
+version '2.4.9'
 
 escrow_ignore {
-    'config/config.lua',
+    'config/*.lua',
 }
 
 shared_scripts {
     '@ox_lib/init.lua',
-    'config/config.lua',
+    'config/*.lua',
 }
 
 client_scripts {
@@ -34,4 +34,10 @@ files {
     'html/sounds/klingel_police.mp3',
     'html/sounds/klingel_ems.mp3',
     'html/sounds/klingel_fib.mp3'
+}
+
+dependencies {
+    'es_extended',
+    'oxmysql',
+    'ox_lib'
 }

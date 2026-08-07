@@ -114,6 +114,42 @@ window.addEventListener("message", function (event) {
             closeRevive();
             break;
 
+        case "openLifeinvader":
+            openLifeinvader(data);
+            break;
+
+        case "closeLifeinvader":
+            closeLifeinvader();
+            break;
+
+        case "lifeinvaderResult":
+            showLifeinvaderResult(data);
+            break;
+
+        case "lifeinvaderBroadcast":
+            showLifeinvaderBroadcast(data);
+            break;
+
+        case "openFormular":
+            openFormular(data);
+            break;
+
+        case "closeFormular":
+            closeFormular();
+            break;
+
+        case "mc_core:kampfunfaehig:show":
+            showKampfunfaehig();
+            break;
+
+        case "mc_core:kampfunfaehig:update":
+            updateKampfunfaehig(data.seconds, data.total);
+            break;
+
+        case "mc_core:kampfunfaehig:hide":
+            hideKampfunfaehig();
+            break;
+
         /* -------------------------------------------------
            Legacy-Namen (falls Lua-Seite noch "open"/"close"
            statt der neuen getrennten Actions schickt).
@@ -136,6 +172,9 @@ window.addEventListener("message", function (event) {
             closeInsurance();
             closeMoneywash();
             closeRevive();
+            closeLifeinvader();
+            closeFormular();
+            hideKampfunfaehig();
             break;
 
     }
@@ -590,6 +629,14 @@ document.addEventListener("keydown", function (e) {
         requestCloseRevive();
     }
 
+    if (!document.getElementById("lifeinvaderApp").classList.contains("hidden")) {
+        requestCloseLifeinvader();
+    }
+
+    if (!document.getElementById("formularApp").classList.contains("hidden")) {
+        requestCloseFormular();
+    }
+
 });
 
 /* ===========================================================
@@ -999,3 +1046,328 @@ document.getElementById("ws-revive").onclick = function () {
     }).catch(() => {});
 
 };
+
+/* ===========================================================
+   LIFEINVADER UI
+=========================================================== */
+
+let liConfig = { maxLength: 140, priceMode: "fixed", priceFixed: 0, pricePerChar: 0 };
+let liBroadcastTimer = null;
+
+function openLifeinvader(data) {
+
+    document.getElementById("lifeinvaderApp").classList.remove("hidden");
+
+    liConfig.maxLength = data.maxLength || 140;
+    liConfig.priceMode = data.priceMode || "fixed";
+    liConfig.priceFixed = data.priceFixed || 0;
+    liConfig.pricePerChar = data.pricePerChar || 0;
+
+    document.getElementById("liServerName").innerText = data.serverName || "Lifeinvader";
+
+    const logo = document.getElementById("liLogo");
+    if (data.logo) {
+        logo.src = data.logo;
+        logo.classList.remove("hidden");
+    } else {
+        logo.classList.add("hidden");
+    }
+
+    const textarea = document.getElementById("liText");
+    textarea.value = "";
+    textarea.maxLength = liConfig.maxLength;
+
+    const fields = data.fields || {};
+
+    const nameFieldRow = document.getElementById("liNameFieldRow");
+    const nameInput = document.getElementById("liNameInput");
+    if (fields.name) {
+        nameFieldRow.classList.remove("hidden");
+        nameInput.placeholder = fields.namePlaceholder || "Name";
+        nameInput.value = "";
+    } else {
+        nameFieldRow.classList.add("hidden");
+    }
+
+    const phoneFieldRow = document.getElementById("liPhoneFieldRow");
+    const phoneInput = document.getElementById("liPhoneInput");
+    if (fields.phone) {
+        phoneFieldRow.classList.remove("hidden");
+        phoneInput.placeholder = fields.phonePlaceholder || "Telefonnummer";
+        phoneInput.value = "";
+    } else {
+        phoneFieldRow.classList.add("hidden");
+    }
+
+    textarea.focus();
+
+    const nameRow = document.getElementById("liNameRow");
+    const nameCheckbox = document.getElementById("liNameCheckbox");
+
+    if (data.allowName) {
+        nameRow.classList.remove("hidden");
+    } else {
+        nameRow.classList.add("hidden");
+    }
+    nameCheckbox.checked = !!data.nameDefault;
+
+    document.getElementById("liFeedback").innerText = "";
+
+    updateLifeinvaderPrice();
+
+}
+
+function closeLifeinvader() {
+
+    document.getElementById("lifeinvaderApp").classList.add("hidden");
+
+}
+
+function requestCloseLifeinvader() {
+
+    closeLifeinvader();
+
+    fetch(`https://${GetParentResourceName()}/closeLifeinvader`, {
+        method: "POST"
+    }).catch(() => {});
+
+}
+
+document.getElementById("liCloseBtn").onclick = requestCloseLifeinvader;
+
+function updateLifeinvaderPrice() {
+
+    const text = document.getElementById("liText").value;
+
+    document.getElementById("liCharCount").innerText = `${text.length} / ${liConfig.maxLength}`;
+
+    const price = liConfig.priceMode === "perChar"
+        ? text.length * liConfig.pricePerChar
+        : liConfig.priceFixed;
+
+    document.getElementById("liPrice").innerText = `$${price}`;
+
+}
+
+document.getElementById("liText").addEventListener("input", updateLifeinvaderPrice);
+
+document.getElementById("liSubmitBtn").onclick = function () {
+
+    const text = document.getElementById("liText").value.trim();
+    const feedback = document.getElementById("liFeedback");
+
+    if (!text) {
+        feedback.innerText = "Deine Nachricht darf nicht leer sein.";
+        feedback.style.color = "var(--danger)";
+        return;
+    }
+
+    fetch(`https://${GetParentResourceName()}/submitLifeinvader`, {
+        method: "POST",
+        body: JSON.stringify({
+            text: text,
+            withName: document.getElementById("liNameCheckbox").checked,
+            name: document.getElementById("liNameInput").value.trim(),
+            phone: document.getElementById("liPhoneInput").value.trim()
+        })
+    }).catch(() => {});
+
+};
+
+function showLifeinvaderResult(data) {
+
+    const feedback = document.getElementById("liFeedback");
+    feedback.innerText = data.message || "";
+    feedback.style.color = data.success ? "var(--cash)" : "var(--danger)";
+
+    if (data.success) {
+        document.getElementById("liText").value = "";
+        document.getElementById("liNameInput").value = "";
+        document.getElementById("liPhoneInput").value = "";
+        updateLifeinvaderPrice();
+    }
+
+}
+
+function showLifeinvaderBroadcast(data) {
+
+    const brand = document.getElementById("liBroadcastBrand");
+    const text = document.getElementById("liBroadcastText");
+    const box = document.getElementById("liBroadcastApp");
+
+    brand.innerText = data.serverName || "Lifeinvader";
+    text.innerText = data.text || "";
+
+    box.classList.remove("hidden");
+    box.classList.add("li-broadcast-show");
+
+    clearTimeout(liBroadcastTimer);
+    liBroadcastTimer = setTimeout(() => {
+        box.classList.remove("li-broadcast-show");
+        box.classList.add("hidden");
+    }, (data.duration || 8) * 1000);
+
+}
+
+/* ===========================================================
+   FORMULAR UI (eigenständig)
+   Felder kommen dynamisch aus der Config (data.fields) - erlaubte
+   Typen: "text", "number", "textarea", "select" (mit "options").
+=========================================================== */
+
+let formularFieldDefs = [];
+
+function openFormular(data) {
+
+    document.getElementById("formularApp").classList.remove("hidden");
+
+    formularFieldDefs = data.fields || [];
+
+    const container = document.getElementById("formularFields");
+    container.innerHTML = "";
+
+    formularFieldDefs.forEach(function (field) {
+
+        const wrap = document.createElement("div");
+        wrap.className = "formular-field";
+
+        const label = document.createElement("label");
+        label.setAttribute("for", `formular-${field.id}`);
+        label.innerText = field.label || field.id;
+        wrap.appendChild(label);
+
+        let input;
+
+        if (field.type === "select") {
+
+            input = document.createElement("select");
+            input.className = "formular-select";
+
+            (field.options || []).forEach(function (opt) {
+                const optionEl = document.createElement("option");
+                optionEl.value = opt;
+                optionEl.innerText = opt;
+                input.appendChild(optionEl);
+            });
+
+        } else if (field.type === "textarea") {
+
+            input = document.createElement("textarea");
+            input.className = "formular-textarea";
+            if (field.maxlength) input.maxLength = field.maxlength;
+
+        } else {
+
+            input = document.createElement("input");
+            input.className = "formular-input";
+            input.type = field.type === "number" ? "number" : "text";
+
+        }
+
+        input.id = `formular-${field.id}`;
+
+        // Automatisch ermittelte Felder (z.B. Telefonnummer aus den ESX-
+        // Spielerdaten) werden vorbefüllt und schreibgeschützt angezeigt -
+        // der Spieler soll die hier nicht mehr manuell eintippen können.
+        if (field.auto) {
+            const autoValue = (data.autoValues && data.autoValues[field.auto]) || "";
+            input.value = autoValue;
+            input.readOnly = true;
+            input.classList.add("formular-readonly");
+            if (!autoValue) {
+                input.placeholder = "Keine Telefonnummer hinterlegt";
+            }
+        }
+
+        wrap.appendChild(input);
+
+        if (field.type === "textarea" && field.maxlength) {
+            const count = document.createElement("span");
+            count.className = "formular-charcount";
+            count.id = `formular-count-${field.id}`;
+            count.innerText = `0 / ${field.maxlength}`;
+            input.addEventListener("input", function () {
+                count.innerText = `${input.value.length} / ${field.maxlength}`;
+            });
+            wrap.appendChild(count);
+        }
+
+        container.appendChild(wrap);
+
+    });
+
+    document.getElementById("formularFeedback").innerText = "";
+
+}
+
+function closeFormular() {
+
+    document.getElementById("formularApp").classList.add("hidden");
+
+}
+
+function requestCloseFormular() {
+
+    closeFormular();
+
+    fetch(`https://${GetParentResourceName()}/closeFormular`, {
+        method: "POST"
+    }).catch(() => {});
+
+}
+
+document.getElementById("formularCloseBtn").onclick = requestCloseFormular;
+
+document.getElementById("formularSubmitBtn").onclick = function () {
+
+    const payload = {};
+
+    formularFieldDefs.forEach(function (field) {
+        const el = document.getElementById(`formular-${field.id}`);
+        if (el) payload[field.id] = el.value;
+    });
+
+    fetch(`https://${GetParentResourceName()}/submitFormular`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+    }).catch(() => {});
+
+    closeFormular();
+
+};
+
+/* ===========================================================
+   KAMPFUNFAEHIGKEIT HUD (eigenstaendig, isoliert)
+=========================================================== */
+
+const KF_RING_CIRCUMFERENCE = 326.7256; // 2 * PI * r(52)
+
+function formatKfTime(totalSeconds) {
+    const seconds = Math.max(0, Math.floor(totalSeconds || 0));
+    const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const s = (seconds % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+}
+
+function showKampfunfaehig() {
+    const el = document.getElementById("kampfunfaehigApp");
+    if (el) el.classList.remove("hidden");
+}
+
+function updateKampfunfaehig(seconds, total) {
+    const timerEl = document.getElementById("kfTimer");
+    if (timerEl) timerEl.textContent = formatKfTime(seconds);
+
+    const ringEl = document.getElementById("kfRingFg");
+    if (ringEl) {
+        const safeTotal = total && total > 0 ? total : (seconds || 1);
+        const fraction = Math.max(0, Math.min(1, (seconds || 0) / safeTotal));
+        const offset = KF_RING_CIRCUMFERENCE * (1 - fraction);
+        ringEl.style.strokeDashoffset = offset;
+    }
+}
+
+function hideKampfunfaehig() {
+    const el = document.getElementById("kampfunfaehigApp");
+    if (el) el.classList.add("hidden");
+}
