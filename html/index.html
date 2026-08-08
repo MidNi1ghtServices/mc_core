@@ -423,36 +423,56 @@
 
         <div class="li-body">
 
-            <div id="liNameFieldRow" class="li-input-row hidden">
-                <input type="text" id="liNameInput" class="li-text-input" placeholder="Name">
+            <div class="li-body-grid">
+                <div class="li-main-col">
+
+                    <div id="liNameFieldRow" class="li-input-row hidden">
+                        <input type="text" id="liNameInput" class="li-text-input" placeholder="Name">
+                    </div>
+
+                    <div id="liPhoneFieldRow" class="li-input-row hidden">
+                        <input type="text" id="liPhoneInput" class="li-text-input" placeholder="Telefonnummer">
+                    </div>
+
+                    <textarea id="liText" class="li-textarea-v2" placeholder="Schreibe deinen Werbetext.."></textarea>
+
+                    <div class="li-actions-row">
+                        <button id="liPublicBtn" class="li-action-btn li-action-public active" data-mode="public">
+                            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+                            <span>Öffentlich</span>
+                        </button>
+                        <button id="liPrivateBtn" class="li-action-btn li-action-private" data-mode="private">
+                            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>
+                            <span>Privat</span>
+                        </button>
+                        <button id="liSubmitBtn" class="li-action-btn li-action-send">Senden</button>
+                        <button id="liCloseBtn" class="li-action-btn li-action-cancel">Abbrechen</button>
+                    </div>
+
+                    <div id="liFeedback" class="empty-state small"></div>
+
+                </div>
+
+                <aside class="li-preview-col">
+                    <div class="li-preview-card">
+                        <div id="liPreviewName" class="li-preview-name">-</div>
+
+                        <div id="liPreviewDateRow" class="li-preview-row">
+                            <svg class="li-preview-icon" viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M12.5,7V12.25L17,14.92L16.25,16.15L11,13V7H12.5Z"/></svg>
+                            <span id="liPreviewDate">-</span>
+                        </div>
+
+                        <div id="liPreviewPhoneRow" class="li-preview-row hidden">
+                            <svg class="li-preview-icon" viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M6.62,10.79C8.06,13.62 10.38,15.94 13.21,17.38L15.41,15.18C15.69,14.9 16.08,14.82 16.43,14.93C17.55,15.3 18.75,15.5 20,15.5A1,1 0 0,1 21,16.5V20A1,1 0 0,1 20,21A17,17 0 0,1 3,4A1,1 0 0,1 4,3H7.5A1,1 0 0,1 8.5,4C8.5,5.25 8.7,6.45 9.07,7.57C9.18,7.92 9.1,8.31 8.82,8.59L6.62,10.79Z"/></svg>
+                            <span id="liPreviewPhone">-</span>
+                        </div>
+
+                        <div id="liPreviewText" class="li-preview-text">Hello Welcome to HEX SCRIPTS</div>
+
+                        <span class="li-preview-arrow">▲</span>
+                    </div>
+                </aside>
             </div>
-
-            <div id="liPhoneFieldRow" class="li-input-row hidden">
-                <input type="text" id="liPhoneInput" class="li-text-input" placeholder="Telefonnummer">
-            </div>
-
-            <textarea id="liText" class="li-textarea-v2" placeholder="Schreibe deinen Werbetext.."></textarea>
-
-            <div id="liVideoBox" class="li-video-box">
-                <button id="liVideoPlayBtn" class="li-video-play" title="Video-Vorschau">
-                    <svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-                </button>
-            </div>
-
-            <div class="li-actions-row">
-                <button id="liPublicBtn" class="li-action-btn li-action-public active" data-mode="public">
-                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
-                    <span>Öffentlich</span>
-                </button>
-                <button id="liPrivateBtn" class="li-action-btn li-action-private" data-mode="private">
-                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>
-                    <span>Privat</span>
-                </button>
-                <button id="liSubmitBtn" class="li-action-btn li-action-send">Senden</button>
-                <button id="liCloseBtn" class="li-action-btn li-action-cancel">Abbrechen</button>
-            </div>
-
-            <div id="liFeedback" class="empty-state small"></div>
 
             <div class="li-info-box">
                 <h3 id="liInfoTitle" class="li-info-title">Information</h3>
@@ -488,10 +508,19 @@
 </div>
 
 <!-- Lifeinvader Broadcast: kurze Einblendung für ALLE Spieler, sobald eine Werbung veröffentlicht wurde -->
+<!-- Positioniert oberhalb der Minimap, im Stil einer Ingame-News-Einblendung -->
 <div id="liBroadcastApp" class="li-broadcast hidden">
     <div class="li-broadcast-inner">
-        <span id="liBroadcastBrand" class="li-broadcast-brand">Lifeinvader</span>
-        <span id="liBroadcastText" class="li-broadcast-text"></span>
+        <div class="li-broadcast-top">
+            <span id="liBroadcastBrand" class="li-broadcast-brand">Exclusive News 24/7</span>
+            <span id="liBroadcastText" class="li-broadcast-text"></span>
+            <span id="liBroadcastAuthorRow" class="li-broadcast-author-row hidden">
+                <span id="liBroadcastAuthor" class="li-broadcast-author"></span>
+            </span>
+        </div>
+        <div class="li-broadcast-play">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 4.5v15l13-7.5-13-7.5z" fill="currentColor"/></svg>
+        </div>
     </div>
 </div>
 

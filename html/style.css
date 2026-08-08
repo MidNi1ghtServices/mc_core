@@ -966,7 +966,7 @@ body {
 =========================== */
 
 .li-panel-v2 {
-    width: 560px;
+    width: 780px;
     max-width: 94vw;
     background: #0e0e12;
     border: 1px solid rgba(255, 255, 255, .08);
@@ -1058,9 +1058,79 @@ body {
     flex-direction: column;
 }
 
+.li-body-grid {
+    display: grid;
+    grid-template-columns: 1fr 220px;
+    gap: 18px;
+}
+
+.li-main-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.li-preview-col {
+    min-width: 0;
+}
+
+.li-preview-card {
+    position: relative;
+    height: 100%;
+    min-height: 150px;
+    background: rgba(255, 255, 255, .03);
+    border: 1px solid rgba(255, 255, 255, .08);
+    border-radius: 8px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow: hidden;
+}
+
+.li-preview-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.li-preview-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.li-preview-row.hidden {
+    display: none;
+}
+
+.li-preview-icon {
+    flex-shrink: 0;
+    color: var(--li-accent);
+}
+
+.li-preview-text {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+.li-preview-arrow {
+    position: absolute;
+    right: 10px;
+    bottom: 8px;
+    font-size: 10px;
+    color: var(--cash);
+}
+
 .li-textarea-v2 {
     width: 100%;
-    min-height: 64px;
+    min-height: 150px;
     resize: none;
     background: transparent;
     border: none;
@@ -1079,36 +1149,6 @@ body {
 .li-textarea-v2:focus {
     outline: none;
     border-bottom-color: var(--li-accent);
-}
-
-.li-video-box {
-    width: 100%;
-    height: 150px;
-    background: repeating-linear-gradient(45deg, #1a1a20, #1a1a20 10px, #17171c 10px, #17171c 20px);
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 16px;
-}
-
-.li-video-play {
-    width: 58px;
-    height: 58px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, .12);
-    border: none;
-    color: #fff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: background .15s ease, transform .15s ease;
-}
-
-.li-video-play:hover {
-    background: rgba(255, 255, 255, .22);
-    transform: scale(1.05);
 }
 
 .li-actions-row {
@@ -1249,49 +1289,86 @@ body {
 
 /* ===========================
    LIFEINVADER BROADCAST (Einblendung für alle Spieler)
+   Positioniert oberhalb der Minimap (unten links), im Stil
+   einer Ingame-News-Einblendung mit mehreren gleich eingerückten Zeilen.
 =========================== */
 
 .li-broadcast {
     position: fixed;
-    top: 6%;
-    left: 50%;
-    transform: translate(-50%, -20px);
+    left: 20px;
+    bottom: 230px; /* oberhalb der Standard-Minimap */
+    width: 320px;
+    height: 180px;
     pointer-events: none;
     opacity: 0;
+    transform: translateY(10px);
     transition: opacity .35s ease, transform .35s ease;
     z-index: 999;
 }
 
 .li-broadcast-show {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translateY(0);
 }
 
 .li-broadcast-inner {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: var(--li-broadcast-bg);
-    border: 1px solid var(--li-broadcast-border);
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(120% 100% at 25% 15%, #1a1a1a 0%, #060606 65%, #000 100%);
+    border: 1px solid rgba(255, 255, 255, .07);
     border-radius: 10px;
-    padding: 12px 20px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, .6);
-    max-width: 520px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .55);
+    overflow: hidden;
+    padding: 14px 16px;
+}
+
+.li-broadcast-top {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 85%;
 }
 
 .li-broadcast-brand {
     font-family: var(--font-head);
-    font-weight: 700;
-    letter-spacing: .5px;
-    text-transform: uppercase;
-    color: var(--li-accent);
-    flex-shrink: 0;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: .2px;
+    color: #f2f2f2;
 }
 
 .li-broadcast-text {
-    font-size: 14px;
-    color: var(--text);
+    font-size: 11px;
+    line-height: 1.4;
+    color: #bdbdbd;
     word-break: break-word;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.li-broadcast-author-row.hidden {
+    display: none;
+}
+
+.li-broadcast-author {
+    font-size: 10px;
+    color: #888;
+}
+
+.li-broadcast-play {
+    position: absolute;
+    right: 14px;
+    bottom: 12px;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, .92);
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .6));
 }
 
 /* ===========================

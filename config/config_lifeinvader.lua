@@ -14,18 +14,13 @@ Config.Lifeinvader = {
 
     -- UI
     serverName = 'MC Core',    -- Servername/Branding im UI
+    broadcastTitle = 'Exclusive News 24/7', -- Titelzeile der Ingame-Einblendung (oberhalb der Minimap)
     logo = '',                  -- Logo-URL fürs UI (leer = kein Logo, nur Text)
     badge = 'WERBUNG',          -- kleines rotes Badge neben dem Titel
 
     -- Info-Box unten im UI (frei anpassbarer Werbetext für das Modul selbst)
     infoTitle = 'Information',
     infoText = 'Hier kannst du Werbungen schalten und damit viele Spieler erreichen. Egal ob du ein Auto verkaufen oder eine Nutte vermieten möchtest, hier ist alles möglich! Schalte jeden Tag Werbungen und werde ein erfolgreicher Businessman.',
-
-    -- Video-Vorschaufeld (optisch, wie im Referenz-Design). Rein clientseitig,
-    -- speichert/verschickt keine echten Videodaten - dient als Platzhalter/Vorschau.
-    videoPreview = {
-        enabled = false,
-    },
 
     -- ESX-Anbindung (konfigurierbar, falls z.B. ein Fork von es_extended läuft)
     esxSharedObject = 'es_extended',

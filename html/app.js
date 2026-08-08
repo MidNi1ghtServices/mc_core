@@ -1054,7 +1054,7 @@ document.getElementById("ws-revive").onclick = function () {
 let liConfig = { maxLength: 140, priceMode: "fixed", priceFixed: 0, pricePerChar: 0, allowName: true };
 let liBroadcastTimer = null;
 let liPublicMode = true; // true = Öffentlich (mit Namen, falls erlaubt), false = Privat/Anonym
-let liVideoPlaying = false;
+let liPreviewOpenedAt = null;
 
 function openLifeinvader(data) {
 
@@ -1129,13 +1129,36 @@ function openLifeinvader(data) {
     document.getElementById("liInfoTitle").innerText = data.infoTitle || "Information";
     document.getElementById("liInfoText").innerText = data.infoText || "";
 
-    // Video-Vorschau zurücksetzen
-    liVideoPlaying = false;
-    document.getElementById("liVideoBox").classList.remove("hidden");
-
     document.getElementById("liFeedback").innerText = "";
 
+    // Live-Vorschau rechts
+    liPreviewOpenedAt = new Date();
+    document.getElementById("liPreviewPhoneRow").classList.toggle("hidden", !fields.phone);
+    updateLiPreview();
+
     updateLifeinvaderPrice();
+
+}
+
+function formatLiPreviewDate(date) {
+    const p = n => String(n).padStart(2, "0");
+    return `${p(date.getDate())}.${p(date.getMonth() + 1)}.${date.getFullYear()} ${p(date.getHours())}:${p(date.getMinutes())}`;
+}
+
+function updateLiPreview() {
+
+    const nameInput = document.getElementById("liNameInput");
+    const phoneInput = document.getElementById("liPhoneInput");
+    const text = document.getElementById("liText").value;
+    const playerName = document.getElementById("liPlayerName").innerText;
+
+    const showName = liPublicMode && liConfig.allowName;
+    const customName = nameInput.value.trim();
+
+    document.getElementById("liPreviewName").innerText = showName ? (customName || playerName) : "Anonym";
+    document.getElementById("liPreviewDate").innerText = formatLiPreviewDate(liPreviewOpenedAt || new Date());
+    document.getElementById("liPreviewPhone").innerText = (showName && phoneInput.value.trim()) || "-";
+    document.getElementById("liPreviewText").innerText = text || "Deine Werbung erscheint hier..";
 
 }
 
@@ -1148,6 +1171,7 @@ function formatLiTimer(totalSeconds) {
 function updateLiModeButtons() {
     document.getElementById("liPublicBtn").classList.toggle("active", liPublicMode);
     document.getElementById("liPrivateBtn").classList.toggle("active", !liPublicMode);
+    updateLiPreview();
 }
 
 document.getElementById("liPublicBtn").onclick = function () {
@@ -1161,13 +1185,9 @@ document.getElementById("liPrivateBtn").onclick = function () {
     updateLiModeButtons();
 };
 
-document.getElementById("liVideoPlayBtn").onclick = function () {
-    liVideoPlaying = !liVideoPlaying;
-    const icon = liVideoPlaying
-        ? '<svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'
-        : '<svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
-    document.getElementById("liVideoPlayBtn").innerHTML = icon;
-};
+document.getElementById("liText").addEventListener("input", updateLiPreview);
+document.getElementById("liNameInput").addEventListener("input", updateLiPreview);
+document.getElementById("liPhoneInput").addEventListener("input", updateLiPreview);
 
 function closeLifeinvader() {
 
@@ -1212,13 +1232,16 @@ document.getElementById("liSubmitBtn").onclick = function () {
         return;
     }
 
+    const isPublic = liConfig.allowName && liPublicMode;
+
     fetch(`https://${GetParentResourceName()}/submitLifeinvader`, {
         method: "POST",
         body: JSON.stringify({
             text: text,
-            withName: liConfig.allowName && liPublicMode,
-            name: document.getElementById("liNameInput").value.trim(),
-            phone: document.getElementById("liPhoneInput").value.trim()
+            withName: isPublic,
+            // Bei "Privat/Anonym" werden Name und Telefonnummer erst gar nicht mitgeschickt.
+            name: isPublic ? document.getElementById("liNameInput").value.trim() : "",
+            phone: isPublic ? document.getElementById("liPhoneInput").value.trim() : ""
         })
     }).catch(() => {});
 
@@ -1251,9 +1274,18 @@ function showLifeinvaderBroadcast(data) {
     const brand = document.getElementById("liBroadcastBrand");
     const text = document.getElementById("liBroadcastText");
     const box = document.getElementById("liBroadcastApp");
+    const authorRow = document.getElementById("liBroadcastAuthorRow");
+    const author = document.getElementById("liBroadcastAuthor");
 
-    brand.innerText = data.serverName || "Lifeinvader";
+    brand.innerText = data.title || "Exclusive News 24/7";
     text.innerText = data.text || "";
+
+    if (data.author) {
+        author.innerText = data.author;
+        authorRow.classList.remove("hidden");
+    } else {
+        authorRow.classList.add("hidden");
+    }
 
     box.classList.remove("hidden");
     box.classList.add("li-broadcast-show");
