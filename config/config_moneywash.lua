@@ -18,7 +18,7 @@ Config.Moneywash = {
         {
             id     = 1,
             label  = "Waschsalon - Innenstadt",
-            coords = vector3(1135.01, -789.12, 57.6),
+            coords = vector3(471.62, -913.24, 35.97),
             radius = 2.0,
            -- blip   = { enabled = true, sprite = 617, color = 5, scale = 0.8 },
             marker = { r = 9, g = 164, b = 241, alpha = 140 },

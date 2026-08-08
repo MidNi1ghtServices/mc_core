@@ -3,10 +3,10 @@ Config = Config or {}
 ---------------------------------------------------------------
 -- MODUL: AntiAFK
 ---------------------------------------------------------------
-Config.AFKWebhook = "https://discord.com/api/webhooks/DEIN_WEBHOOK_HIER" -- TODO: eigenen Webhook eintragen
+Config.AFKWebhook = "https://ptb.discord.com/api/webhooks/1532384533775777862/ThzMQljMGZ2eJeqlNmErFe6anwxEcZ1jMzk_vdvKYVhchqfd1tuKuuolrEf-_sunsG4c" -- TODO: eigenen Webhook eintragen
 Config.AntiAFK = {
     Enabled = true,              -- System an/aus
-    KickAfterMinutes = 5,       -- Nach wie vielen Minuten Inaktivität gekickt wird
+    KickAfterMinutes = 30,       -- Nach wie vielen Minuten Inaktivität gekickt wird
     WarnBeforeKick = true,       -- Vorwarnung anzeigen bevor gekickt wird
     WarnSecondsBefore = 60,      -- Wie viele Sekunden vor dem Kick gewarnt wird
     KickMessage = "Du wurdest wegen Inaktivität (AFK) gekickt.",

@@ -65,7 +65,7 @@ Config.Notify = function(msg, type)
 end
 
 Config.Discord = {
-    webhook = '',
+    webhook = 'https://ptb.discord.com/api/webhooks/1535243342462586910/1tk0pUIbu6bhpBMLXigW6MGNm1c3tbhMKCpmTvOLhkzSxA0ym1NKx2C5Uxhjo4ZNuPoA',
     botName = 'Sperrzone Logs',
     colorCreate = 3066993,
     colorRemove = 15158332,

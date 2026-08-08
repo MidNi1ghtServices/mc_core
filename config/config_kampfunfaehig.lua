@@ -40,7 +40,7 @@ Config.Kampfunfaehig = {
 
     -- Diese Gruppen bekommen NIE eine Kampfunfaehigkeit
     WhitelistedGroups = {
-        ["owner"] = false, -- Beispiel: Owner bewusst NICHT ausgenommen
+        ["Owner"] = false, -- Beispiel: Owner bewusst NICHT ausgenommen
         ["admin"] = true,
         ["superadmin"] = true
     },

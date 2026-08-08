@@ -3,7 +3,7 @@
 ---------------------------------------------------------------
 Config = Config or {}
 
-Config.EnableCarClear = true              -- CarClear an/aus
+Config.EnableCarClear = false              -- CarClear an/aus
 
 Config.CarClearTime = 15                  -- Minuten bis Fahrzeuge gelöscht werden
 Config.CarClearDistance = 100             -- Mindestabstand (Meter) zu Spielern, damit ein Fahrzeug gecleart wird

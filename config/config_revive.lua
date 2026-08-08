@@ -38,7 +38,7 @@ Config.Revive = {
         icon = "https://tobias.isfucking.pro/4zzE5A.png",
         color = "3447003",
         username = "MC - REVIVESTATION",
-        webhook = "https://ptb.discord.com/api/webhooks/1525546367718789140/-TkF6elMoScwB3CytKoXP12fa8ZiPcMZLv4bChb4-6CQwHM9aSGH_RdAuyUSmt32YBEp"
+        webhook = "https://ptb.discord.com/api/webhooks/1535242626411012146/OQoC1SFQp9fV3Dv6EEb7d_7HlYcndPcAc-eZZJW5IKs8amn3kSpt4Qo_V1LNKLDvjCRK"
     }
 
 }

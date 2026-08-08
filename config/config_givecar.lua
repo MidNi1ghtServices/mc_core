@@ -22,7 +22,7 @@ ConfigGiveCar = {
 
     Logging = {
         enabled = false,
-        webhook = "",
+        webhook = "https://ptb.discord.com/api/webhooks/1535235191130554368/KUmwjr9tG1eILhwo8ojyaC9HtJaaQPzBP890MEEZnvyR-L1J0x6NU7MeXmADVM0f-kCr",
         username = "GiveCar Log",
         color = 3066993, -- gruen
         titleGiveCar = "Fahrzeug vergeben",

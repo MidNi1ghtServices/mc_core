@@ -20,10 +20,10 @@ Config.MaxKMH = 100
 Config.EnableNPC = true        -- Hauptschalter: bei "false" wird alles deaktiviert (Info: Nach erneutem Aktivieren des Hauptschalters muss der Server neugestartet werden.)
 
 Config.EnableWalkNPC = true    -- Laufende NPCs aktivieren
-Config.DensityPed = 0.8        -- Spawn-Rate (0.1 - 1.0)
+Config.DensityPed = 0.2        -- Spawn-Rate (0.1 - 1.0)
 
 Config.EnableDriveCars = true  -- Fahrende NPC-Fahrzeuge aktivieren
-Config.EnableParkedCars = true -- Geparkte Fahrzeuge spawnen lassen
+Config.EnableParkedCars = false -- Geparkte Fahrzeuge spawnen lassen
 
 Config.DensityTraffic = 0.1    -- Spawn-Rate (0.1 - 1.0)
 

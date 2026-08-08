@@ -24,7 +24,7 @@ Config.Lifeinvader = {
     -- Video-Vorschaufeld (optisch, wie im Referenz-Design). Rein clientseitig,
     -- speichert/verschickt keine echten Videodaten - dient als Platzhalter/Vorschau.
     videoPreview = {
-        enabled = true,
+        enabled = false,
     },
 
     -- ESX-Anbindung (konfigurierbar, falls z.B. ein Fork von es_extended läuft)
@@ -34,7 +34,7 @@ Config.Lifeinvader = {
 
     -- Terminal-Standort
     location = {
-        coords = vector3(-1093.98, -251.62, 37.77), -- Beispiel: Lifeinvader HQ, Del Perro
+        coords = vector3(-1082.31, -247.56, 37.76), -- Beispiel: Lifeinvader HQ, Del Perro
         radius = 2.0,           -- wie nah man dran sein muss, um zu öffnen (Interact-Distanz)
         showDistance = 15.0,    -- ab welcher Distanz Marker/Prompt überhaupt gezeichnet werden (vorher hart einprogrammiert)
         marker = {

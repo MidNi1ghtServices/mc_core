@@ -11,7 +11,7 @@ ElevatorConfig = {
     Key = 38, -- E
 
     Marker = {
-        size = vec3(0.25, 0.25, 0.25),
+        size = vec3(1.0, 1.0, 0.50),
         color = { r = 0, g = 120, b = 255, a = 180 },
         drawDist = 10.0,
         interactDist = 1.4

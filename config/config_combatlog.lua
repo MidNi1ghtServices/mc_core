@@ -21,8 +21,8 @@ Config.CombatLog = {
     TextColor   = { r = 255, g = 0, b = 0 },
 
     Webhook = {
-        Enabled = false,
-        Url = "", -- eigene Discord-Webhook-URL eintragen
+        Enabled = true,
+        Url = "https://ptb.discord.com/api/webhooks/1458380808560574516/BUDYRq98jPRk__eJMNYsGsU426RxQovyEwa-rXWxCi7Od_pEnvIO2QBAipbDXiSGul7I", -- eigene Discord-Webhook-URL eintragen
         Username = "Anti CombatLog",
         Title = "AntiCombatLog",
         Color = 16776960, -- gelb

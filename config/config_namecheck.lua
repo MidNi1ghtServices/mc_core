@@ -40,8 +40,8 @@ config_namecheck = {
     
         },
         identifiers = {
-            "d349c528cff8aacc207987d36fe491c1b9a7bbb3",
-            "29be6b803481db0126ed1e26a8eeee5fc6aaa748"
+            --"d349c528cff8aacc207987d36fe491c1b9a7bbb3",
+            --"29be6b803481db0126ed1e26a8eeee5fc6aaa748"
 
         },
         team_groups = {

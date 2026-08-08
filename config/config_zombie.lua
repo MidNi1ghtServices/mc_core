@@ -177,18 +177,18 @@ ZombieConfig.Webhook = {
     -- Komplette Webhook-URL aus deinem Discord-Kanal (Kanal-Einstellungen > Integrationen > Webhooks)
     -- WICHTIG: hier stand eine echte, bereits genutzte Webhook-URL im Klartext -
     -- die wurde entfernt. Trag deine eigene ein, sonst wird nichts gepostet.
-    url = "",
+    url = "https://ptb.discord.com/api/webhooks/1535243809867300946/_C6EfmzGJKTvL18_TQnTF-GEkoopJjlUWghjCM-85POqEPTgaIGd6U9gdYsxMHwT7Tgd",
 
     -- Leer lassen beim ERSTEN Start! Das Script postet dann einmalig eine neue Nachricht
     -- und gibt dir die Message-ID in der Server-Konsole aus. Diese ID hier eintragen,
     -- damit ab dann IMMER dieselbe Nachricht aktualisiert (editiert) wird, statt neue zu posten.
-    messageId = "",
+    messageId = "1535243889156296705",
 
-    botName = "MC_ZombieZones",
+    botName = "MC ZombieZones",
     avatarUrl = "",
     color = 16711680, -- Dezimalwert, siehe https://convertingcolors.com
     title = "» Zombie Zone × Top 10",
-    footerText = "VIN_ZombieZone",
+    footerText = "MC ZombieZone",
 
     -- Wie oft (ms) die Rangliste neu berechnet und die Discord-Nachricht aktualisiert wird
     refreshTime = 300 * 1000, -- 5 Minuten

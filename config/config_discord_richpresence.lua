@@ -3,7 +3,7 @@ Config = Config or {}
 ---------------------------------------------------------------
 -- MODUL: Discord Rich Presence
 ---------------------------------------------------------------
-Config.DiscordAppId = "1530555515988611234"
+Config.DiscordAppId = "1535231363433631785"
 
 Config.DiscordLogo = "logo"             -- Großes Bild (Asset-Name aus dem Discord Dev Portal)
 Config.DiscordLogoText = "MC Roleplay"

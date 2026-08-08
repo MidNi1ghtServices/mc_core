@@ -41,6 +41,6 @@ MautConfig = {
         { coords = vector3(2542.02, 2104.3, 19.62), radius = 10.0, name = "Senora Way Maut" }
     },
 
-    Webhook = "https://ptb.discord.com/api/webhooks/1528903129339400376/-C6BQVA6OEXc3DYFLKJ333kPW0zDq0o5Jc4s0CbU31hFa25aP9Q9zLjfD5BR01ZJoDVF"
+    Webhook = "https://ptb.discord.com/api/webhooks/1535236054146220114/j0W18UexlQ8XGIYxRIhHfEqcIarvp6wwADNRJbV904DrYeuXeISp1gtpkB1chv9RM0jw"
 }
 
